@@ -65,14 +65,30 @@ modularize the implementation, let's start bottomeup
 # Implementation Plan
 This follows your ordering: **(1) package OSS as FastAPI services**, **(2) build internal blocks (UI + missing logic) and only then DB**, **(3) wire via LangGraph**, **(4) pause and reassess**.
 
-### Milestone 1 — package OSS tools as local FastAPI services (with tests)
-- **Goal**: each OSS tool is callable locally via HTTP, with repeatable tests and known failure modes.
-- Deliverables (suggested split):
-  - `arxiv-service`: resolve + download (PDF/LaTeX) + basic metadata extraction
-  - `grobid-service`: PDF → structured JSON (sections, references) + regression tests on a small PDF set
-  - `paperqa-service`: summarize + QA entrypoints (backed by your LLM endpoint)
-  - `embeddings-llm-service`: embeddings + general LLM calls (can be merged elsewhere)
-- **Exit criteria**: services run locally, `/health` passes, and tests cover at least 2–3 representative papers end-to-end per service.
+### Milestone 1 — package OSS tools as local FastAPI services (with scripts)
+- **Goal**: each OSS tool is callable locally via HTTP, with runnable scripts and known failure modes.
+- Deliverables (merged services):
+  - `ingest-parse-service`: arXiv resolve + download (PDF/LaTeX) + GROBID extract (sections/references)
+  - `paperqa-service`: summarize + embed + optional QA (backed by your LLM endpoint)
+- **Local GROBID setup** (Docker):
+  - Pull: `docker pull lfoppiano/grobid:0.8.0`
+  - Run: `docker run --rm -p 9070:8070 --name grobid lfoppiano/grobid:0.8.0`
+  - Health: `GET http://localhost:9070/api/isalive`
+- **Endpoint list**
+  - `ingest-parse-service`
+    - `GET /health`
+    - `POST /arxiv/resolve`
+    - `POST /arxiv/download`
+    - `POST /pdf/extract` (GROBID-backed)
+  - `paperqa-service`
+    - `GET /health`
+    - `POST /summarize`
+    - `POST /embed`
+    - `POST /qa` (optional)
+- **Scripts (replace unit tests)**:
+  - `scripts/test_ingest_parse.sh`: resolve + download + extract for a real arXiv ID
+  - `scripts/test_paperqa.sh`: summarize + embed using extracted text from a real paper
+- **Exit criteria**: services run locally, `/health` passes, scripts succeed end-to-end for 2–3 representative papers.
 
 ### Milestone 2 — internal building blocks (no DB yet)
 - **Interactive UI** (React + `react-d3-tree`)

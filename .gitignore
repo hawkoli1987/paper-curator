@@ -1,1 +1,4 @@
 .cursor/
+storage/
+.venv/
+__pycache__/

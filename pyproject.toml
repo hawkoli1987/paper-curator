@@ -1,0 +1,20 @@
+[project]
+name = "paper-curator"
+version = "0.1.0"
+description = "Local services for paper curation pipeline"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "requests",
+    "arxiv",
+    "python-multipart",
+    "openai",
+    "paper-qa",
+    "pyyaml",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest",
+]
