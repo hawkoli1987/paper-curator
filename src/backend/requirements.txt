@@ -1,0 +1,18 @@
+# FastAPI and server
+fastapi
+uvicorn[standard]
+
+# arXiv paper fetching
+arxiv
+
+# Configuration
+pyyaml
+
+# OpenAI-compatible API client
+openai
+
+# PDF processing
+pillow
+
+# PaperQA2 for RAG and document processing
+paper-qa

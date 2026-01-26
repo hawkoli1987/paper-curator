@@ -1,4 +1,34 @@
+# IDE
 .cursor/
-storage/
+.idea/
+.vscode/
+
+# Python
 .venv/
 __pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Linting/Type checking
+.ruff_cache/
+.mypy_cache/
+
+# Storage
+storage/
+
+# Node.js (frontend)
+node_modules/
+.next/
+.env*.local
+
+# OS
+.DS_Store

@@ -8,7 +8,6 @@ from functools import lru_cache
 from typing import Any, Optional
 
 import arxiv
-import requests
 import yaml
 from fastapi import FastAPI, HTTPException
 from openai import OpenAI
@@ -36,7 +35,7 @@ except Exception:  # noqa: BLE001
     Doc = None
 
 
-app = FastAPI(title="paper-curator-service")
+app = FastAPI(title="paper-curator-backend")
 
 
 class ArxivResolveRequest(BaseModel):
@@ -52,8 +51,6 @@ class ArxivDownloadRequest(BaseModel):
 
 class PdfExtractRequest(BaseModel):
     pdf_path: str = Field(description="Local PDF file path")
-    grobid_url: Optional[str] = Field(default=None, description="Override GROBID URL")
-    force_grobid: bool = Field(default=False, description="Force GROBID extraction instead of PaperQA2")
 
 
 class SummarizeRequest(BaseModel):
@@ -72,18 +69,18 @@ class QaRequest(BaseModel):
 
 
 def _require_identifier(arxiv_id: Optional[str], url: Optional[str]) -> str:
+    """Extract arXiv ID from provided arxiv_id or URL."""
     if arxiv_id:
         return arxiv_id
     if url:
+        # Parse arXiv ID from URL (e.g., https://arxiv.org/abs/1706.03762)
+        import re
+        match = re.search(r"arxiv\.org/(?:abs|pdf)/([^/\s?]+)", url)
+        if match:
+            return match.group(1).replace(".pdf", "")
+        # Fallback: assume URL is just the ID
         return url
     raise HTTPException(status_code=400, detail="Provide arxiv_id or url.")
-
-
-def _get_grobid_url(override: Optional[str]) -> str:
-    if override:
-        return override
-    config = _load_config()
-    return config.get("service_base_url", "http://localhost:9070")
 
 
 def _load_prompt() -> tuple[str, str, str]:
@@ -106,10 +103,8 @@ def _load_config_cached(config_mtime: float) -> dict[str, Any]:
     config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     required = (
         "openai_api_base",
-        "openai_api_base2",
         "openai_api_base3",
         "openai_api_key",
-        "service_base_url",
     )
     for key in required:
         if key not in config:
@@ -193,6 +188,7 @@ def _paperqa_answer(
             "chunk_chars": int(config.get("paperqa_chunk_chars", 5000)),
             "overlap": int(config.get("paperqa_chunk_overlap", 250)),
         }
+
         def _build_settings(use_doc_details: bool) -> Settings:
             parsing_settings = ParsingSettings(
                 reader_config=reader_config,
@@ -227,6 +223,7 @@ def _paperqa_answer(
                 parsing=parsing_settings,
                 answer=answer_settings,
             )
+
         use_doc_details = bool(config.get("paperqa_use_doc_details", True))
         settings = _build_settings(use_doc_details)
         try:
@@ -253,6 +250,7 @@ def _paperqa_answer(
 
 
 def _paperqa_extract_pdf(pdf_path: pathlib.Path) -> dict[str, Any]:
+    """Extract text from PDF using PaperQA2's native parser."""
     if (
         Docs is None
         or Settings is None
@@ -307,7 +305,10 @@ def arxiv_resolve(payload: ArxivResolveRequest) -> dict[str, Any]:
     identifier = _require_identifier(payload.arxiv_id, payload.url)
     client = arxiv.Client()
     search = arxiv.Search(id_list=[identifier])
-    results = list(client.results(search))
+    try:
+        results = list(client.results(search))
+    except arxiv.HTTPError:
+        raise HTTPException(status_code=404, detail="No arXiv result found.")
     if not results:
         raise HTTPException(status_code=404, detail="No arXiv result found.")
     result = results[0]
@@ -341,7 +342,7 @@ def arxiv_download(payload: ArxivDownloadRequest) -> dict[str, Any]:
     source_error = None
     try:
         latex_path = result.download_source(dirpath=output_dir)
-    except Exception as exc:  # noqa: BLE001 - propagate as response field
+    except Exception as exc:  # noqa: BLE001
         source_error = str(exc)
 
     return {
@@ -354,34 +355,11 @@ def arxiv_download(payload: ArxivDownloadRequest) -> dict[str, Any]:
 
 @app.post("/pdf/extract")
 def pdf_extract(payload: PdfExtractRequest) -> dict[str, Any]:
+    """Extract text from PDF using PaperQA2's native parser."""
     pdf_path = pathlib.Path(payload.pdf_path)
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="PDF not found.")
-    if not payload.force_grobid:
-        try:
-            return _paperqa_extract_pdf(pdf_path)
-        except HTTPException as exc:
-            print("WARNING: PaperQA2 parse failed; falling back to GROBID.")
-            if exc.status_code != 502:
-                raise
-
-    grobid_url = _get_grobid_url(payload.grobid_url)
-    endpoint = f"{grobid_url.rstrip('/')}/api/processFulltextDocument"
-
-    with pdf_path.open("rb") as handle:
-        files = {"input": (pdf_path.name, handle, "application/pdf")}
-        response = requests.post(endpoint, files=files, timeout=120)
-
-    if response.status_code != 200:
-        raise HTTPException(
-            status_code=502,
-            detail=f"GROBID error: {response.status_code} {response.text[:200]}",
-        )
-
-    tei_xml = response.text
-    parsed = _parse_tei(tei_xml)
-    print("WARNING: Using GROBID extraction instead of PaperQA2 native parser.")
-    return {"tei_xml": tei_xml, "parser": "grobid", **parsed}
+    return _paperqa_extract_pdf(pdf_path)
 
 
 @app.post("/summarize")
@@ -445,43 +423,3 @@ def qa(payload: QaRequest) -> dict[str, Any]:
         embed_model,
     )
     return {"answer": answer}
-
-
-def _parse_tei(tei_xml: str) -> dict[str, Any]:
-    import xml.etree.ElementTree as ET
-
-    ns = {"tei": "http://www.tei-c.org/ns/1.0"}
-    root = ET.fromstring(tei_xml)
-
-    title_el = root.find(".//tei:titleStmt/tei:title", ns)
-    abstract_el = root.find(".//tei:abstract", ns)
-
-    sections = []
-    for div in root.findall(".//tei:text/tei:body/tei:div", ns):
-        head = div.find("tei:head", ns)
-        paragraphs = [p.text for p in div.findall("tei:p", ns) if p.text]
-        if paragraphs:
-            sections.append(
-                {
-                    "title": head.text if head is not None else None,
-                    "text": "\n".join(paragraphs),
-                }
-            )
-
-    references = []
-    for bibl in root.findall(".//tei:listBibl/tei:biblStruct", ns):
-        title = bibl.find(".//tei:title", ns)
-        authors = [a.text for a in bibl.findall(".//tei:author/tei:persName/tei:surname", ns) if a.text]
-        references.append(
-            {
-                "title": title.text if title is not None else None,
-                "authors": authors,
-            }
-        )
-
-    return {
-        "title": title_el.text if title_el is not None else None,
-        "abstract": "".join(abstract_el.itertext()).strip() if abstract_el is not None else None,
-        "sections": sections,
-        "references": references,
-    }

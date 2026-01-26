@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paper-curator"
+version = "0.1.0"
+description = "AI-powered paper reading and curation pipeline"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # FastAPI and server
+    "fastapi",
+    "uvicorn[standard]",
+    # arXiv paper fetching
+    "arxiv",
+    # Configuration
+    "pyyaml",
+    # OpenAI-compatible API client
+    "openai",
+    # PDF processing
+    "pillow",
+    # PaperQA2 for RAG and document processing
+    "paper-qa",
+    # HTTP client
+    "requests",
+    # Testing
+    "pytest",
+    "pytest-asyncio",
+    "httpx",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "mypy",
+    "types-requests",
+    "types-PyYAML",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "slow: marks tests as slow (require network, downloads, etc.)",
+    "external: marks tests as requiring external services (LLM/embedding endpoints)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_ignores = true
