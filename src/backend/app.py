@@ -57,6 +57,12 @@ class QaRequest(BaseModel):
     pdf_path: Optional[str] = Field(default=None, description="Local PDF file path")
 
 
+class ClassifyRequest(BaseModel):
+    title: str = Field(description="Paper title")
+    abstract: str = Field(description="Paper abstract or summary")
+    existing_categories: list[str] = Field(default=[], description="Existing categories in the tree")
+
+
 def _require_identifier(arxiv_id: Optional[str], url: Optional[str]) -> str:
     """Extract arXiv ID from provided arxiv_id or URL."""
     if arxiv_id:
@@ -352,3 +358,57 @@ def qa(payload: QaRequest) -> dict[str, Any]:
         embed_model,
     )
     return {"answer": answer}
+
+
+CLASSIFY_PROMPT = """You are a research paper classifier. Given a paper's title and abstract, determine the most appropriate category for it.
+
+Primary AI research categories:
+- Model Architecture (transformer variants, attention mechanisms, novel neural network designs)
+- Training Efficiency (optimization, distributed training, memory efficiency)
+- Inference Optimization (quantization, pruning, distillation, serving)
+- Reinforcement Learning (RL algorithms, RLHF, reward modeling)
+- Vision (image classification, object detection, segmentation, generation)
+- Speech (ASR, TTS, audio processing)
+- Natural Language Processing (text understanding, generation, translation)
+- Multimodal (vision-language, audio-visual, cross-modal)
+- Datasets & Benchmarks (new datasets, evaluation frameworks)
+- Applications (specific use cases, deployments)
+
+Existing categories in the tree: {existing_categories}
+
+Instructions:
+1. If the paper fits well into an existing category, use that exact category name.
+2. If it doesn't fit existing categories, suggest the most appropriate category from the primary list.
+3. If it's a very specific sub-topic and there are already many papers in a category, suggest a more specific sub-category.
+
+Paper Title: {title}
+
+Paper Abstract: {abstract}
+
+Respond with ONLY the category name, nothing else. Do not include explanations or punctuation."""
+
+
+@app.post("/classify")
+def classify(payload: ClassifyRequest) -> dict[str, Any]:
+    """Classify a paper into a category using LLM."""
+    config = _load_config()
+    base_url = config["openai_api_base"]
+    api_key = config["openai_api_key"]
+    model = _resolve_model(base_url, api_key)
+    client = _get_openai_client(base_url, api_key)
+
+    existing_str = ", ".join(payload.existing_categories) if payload.existing_categories else "None yet"
+    prompt = CLASSIFY_PROMPT.format(
+        existing_categories=existing_str,
+        title=payload.title,
+        abstract=payload.abstract[:2000],  # Limit abstract length
+    )
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=50,
+        temperature=0.1,
+    )
+    category = response.choices[0].message.content.strip()
+    return {"category": category, "model": model}

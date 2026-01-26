@@ -1,6 +1,6 @@
 # OpenAI-compatible API endpoints
 openai_api_base: "https://transmissively-conidial-fredrick.ngrok-free.dev/v1"  # LLM endpoint
-openai_api_base3: "http://localhost:8004/v1"  # Embedding endpoint
+openai_api_base3: "http://host.docker.internal:8004/v1"  # Embedding endpoint (use host.docker.internal for Docker)
 openai_api_key: "local-key"
 
 # PaperQA2 settings

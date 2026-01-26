@@ -19,6 +19,12 @@ interface PaperNode {
   };
 }
 
+interface IngestionStep {
+  name: string;
+  status: "pending" | "running" | "done" | "error";
+  message?: string;
+}
+
 // Convert PaperNode to react-d3-tree compatible format
 function toTreeData(node: PaperNode): RawNodeDatum {
   return {
@@ -35,41 +41,26 @@ function toTreeData(node: PaperNode): RawNodeDatum {
   };
 }
 
-interface IngestionStep {
-  name: string;
-  status: "pending" | "running" | "done" | "error";
-  message?: string;
-}
-
 const initialTaxonomy: PaperNode = {
   name: "AI Papers",
   children: [],
 };
-
-const CATEGORIES = [
-  "Model Architecture",
-  "Training Efficiency",
-  "Inference Optimization",
-  "Reinforcement Learning",
-  "Vision",
-  "Speech",
-  "Natural Language Processing",
-  "Datasets & Benchmarks",
-  "Applications",
-  "Other",
-];
 
 export default function Home() {
   const [arxivUrl, setArxivUrl] = useState("");
   const [taxonomy, setTaxonomy] = useState<PaperNode>(initialTaxonomy);
   const [selectedNode, setSelectedNode] = useState<PaperNode | null>(null);
   const [isIngesting, setIsIngesting] = useState(false);
-  const [selectedCategory, setSelectedCategory] = useState(CATEGORIES[0]);
   const [steps, setSteps] = useState<IngestionStep[]>([]);
 
   const updateStep = (index: number, update: Partial<IngestionStep>) => {
     setSteps((prev) => prev.map((s, i) => (i === index ? { ...s, ...update } : s)));
   };
+
+  // Get existing categories from the tree
+  const existingCategories = useMemo(() => {
+    return taxonomy.children?.map((c) => c.name) || [];
+  }, [taxonomy]);
 
   const addPaperToTree = useCallback(
     (paper: {
@@ -114,13 +105,16 @@ export default function Home() {
       { name: "Resolve arXiv metadata", status: "pending" },
       { name: "Download PDF", status: "pending" },
       { name: "Extract text", status: "pending" },
-      { name: "Generate summary", status: "pending" },
+      { name: "Classify paper (LLM)", status: "pending" },
+      { name: "Generate summary (LLM)", status: "pending" },
     ]);
 
     let arxivId = "";
     let title = "";
     let authors: string[] = [];
+    let abstract = "";
     let pdfPath = "";
+    let category = "";
     let summary = "";
 
     // Step 1: Resolve
@@ -139,6 +133,7 @@ export default function Home() {
     arxivId = resolveData.arxiv_id;
     title = resolveData.title;
     authors = resolveData.authors;
+    abstract = resolveData.summary;
     updateStep(0, { status: "done", message: title });
 
     // Step 2: Download
@@ -171,21 +166,41 @@ export default function Home() {
     }
     updateStep(2, { status: "done", message: "Text extracted" });
 
-    // Step 4: Summarize
-    updateStep(3, { status: "running", message: "Generating summary (this may take a minute)..." });
+    // Step 4: Classify (LLM)
+    updateStep(3, { status: "running", message: "Determining category..." });
+    const classifyRes = await fetch("/api/classify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title,
+        abstract,
+        existing_categories: existingCategories,
+      }),
+    });
+    if (!classifyRes.ok) {
+      updateStep(3, { status: "error", message: `HTTP ${classifyRes.status}` });
+      setIsIngesting(false);
+      return;
+    }
+    const classifyData = await classifyRes.json();
+    category = classifyData.category;
+    updateStep(3, { status: "done", message: `Category: ${category}` });
+
+    // Step 5: Summarize
+    updateStep(4, { status: "running", message: "Generating summary (this may take a minute)..." });
     const summarizeRes = await fetch("/api/summarize", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pdf_path: pdfPath }),
     });
     if (!summarizeRes.ok) {
-      updateStep(3, { status: "error", message: `HTTP ${summarizeRes.status}` });
+      updateStep(4, { status: "error", message: `HTTP ${summarizeRes.status}` });
       setIsIngesting(false);
       return;
     }
     const summarizeData = await summarizeRes.json();
     summary = summarizeData.summary;
-    updateStep(3, { status: "done", message: "Summary generated" });
+    updateStep(4, { status: "done", message: "Summary generated" });
 
     // Add to tree
     addPaperToTree({
@@ -194,7 +209,7 @@ export default function Home() {
       authors,
       summary,
       pdfPath,
-      category: selectedCategory,
+      category,
     });
 
     setArxivUrl("");
@@ -280,6 +295,9 @@ export default function Home() {
         {/* Ingest section */}
         <div style={{ marginBottom: "2rem", backgroundColor: "white", padding: "1rem", borderRadius: "8px", border: "1px solid #e5e5e5" }}>
           <h2 style={{ marginTop: 0, fontSize: "1.125rem", fontWeight: 600 }}>Ingest Paper</h2>
+          <p style={{ fontSize: "0.75rem", color: "#666", marginBottom: "0.75rem" }}>
+            Enter an arXiv URL or ID. The paper will be automatically classified by the LLM.
+          </p>
           <input
             type="text"
             value={arxivUrl}
@@ -296,29 +314,6 @@ export default function Home() {
               fontSize: "0.875rem",
             }}
           />
-          <div style={{ marginBottom: "0.75rem" }}>
-            <label style={{ fontSize: "0.875rem", color: "#666", display: "block", marginBottom: "0.25rem" }}>
-              Category
-            </label>
-            <select
-              value={selectedCategory}
-              onChange={(e) => setSelectedCategory(e.target.value)}
-              disabled={isIngesting}
-              style={{
-                width: "100%",
-                padding: "0.5rem",
-                border: "1px solid #ddd",
-                borderRadius: "4px",
-                fontSize: "0.875rem",
-              }}
-            >
-              {CATEGORIES.map((cat) => (
-                <option key={cat} value={cat}>
-                  {cat}
-                </option>
-              ))}
-            </select>
-          </div>
           <button
             onClick={handleIngest}
             disabled={isIngesting || !arxivUrl.trim()}
