@@ -876,7 +876,7 @@ def find_similar_papers(payload: SimilarPapersRequest) -> dict[str, Any]:
     
     # Get or compute embedding
     embedding = paper.get("embedding")
-    if not embedding:
+    if embedding is None:
         # Compute embedding from abstract + title
         text = f"{paper['title']}\n\n{paper.get('abstract', '')}"
         endpoint_config = _get_endpoint_config()

@@ -94,11 +94,14 @@ def get_paper_by_id(paper_id: int) -> Optional[dict[str, Any]]:
 
 def update_paper_embedding(paper_id: int, embedding: list[float]) -> None:
     """Update paper embedding."""
+    import numpy as np
+    embedding_arr = np.array(embedding, dtype=np.float32)
+    
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE papers SET embedding = %s WHERE id = %s",
-                (embedding, paper_id)
+                "UPDATE papers SET embedding = %s::vector WHERE id = %s",
+                (embedding_arr, paper_id)
             )
             conn.commit()
 
@@ -116,31 +119,35 @@ def update_paper_summary(paper_id: int, summary: str) -> None:
 
 def find_similar_papers(embedding: list[float], limit: int = 5, exclude_id: Optional[int] = None) -> list[dict[str, Any]]:
     """Find similar papers by embedding using cosine distance."""
+    import numpy as np
+    # Convert to numpy array for pgvector compatibility
+    embedding_arr = np.array(embedding, dtype=np.float32)
+    
     with get_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             if exclude_id:
                 cur.execute(
                     """
                     SELECT id, arxiv_id, title, authors, abstract, summary,
-                           1 - (embedding <=> %s) AS similarity
+                           1 - (embedding <=> %s::vector) AS similarity
                     FROM papers
                     WHERE embedding IS NOT NULL AND id != %s
-                    ORDER BY embedding <=> %s
+                    ORDER BY embedding <=> %s::vector
                     LIMIT %s
                     """,
-                    (embedding, exclude_id, embedding, limit)
+                    (embedding_arr, exclude_id, embedding_arr, limit)
                 )
             else:
                 cur.execute(
                     """
                     SELECT id, arxiv_id, title, authors, abstract, summary,
-                           1 - (embedding <=> %s) AS similarity
+                           1 - (embedding <=> %s::vector) AS similarity
                     FROM papers
                     WHERE embedding IS NOT NULL
-                    ORDER BY embedding <=> %s
+                    ORDER BY embedding <=> %s::vector
                     LIMIT %s
                     """,
-                    (embedding, embedding, limit)
+                    (embedding_arr, embedding_arr, limit)
                 )
             return [dict(row) for row in cur.fetchall()]
 

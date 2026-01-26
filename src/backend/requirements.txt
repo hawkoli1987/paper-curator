@@ -20,6 +20,7 @@ paper-qa
 # Database
 psycopg2-binary
 pgvector
+numpy
 
 # HTTP client for external APIs
 httpx
