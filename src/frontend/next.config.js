@@ -3,7 +3,7 @@ const nextConfig = {
   output: "standalone",
   async rewrites() {
     return [
-      // Exclude /api/summarize - handled by custom API route with extended timeout
+      // Core endpoints
       {
         source: "/api/arxiv/:path*",
         destination: "http://backend:8000/arxiv/:path*",
@@ -28,6 +28,33 @@ const nextConfig = {
         source: "/api/health",
         destination: "http://backend:8000/health",
       },
+      {
+        source: "/api/config",
+        destination: "http://backend:8000/config",
+      },
+      // Database & Tree endpoints
+      {
+        source: "/api/papers/:path*",
+        destination: "http://backend:8000/papers/:path*",
+      },
+      {
+        source: "/api/tree",
+        destination: "http://backend:8000/tree",
+      },
+      {
+        source: "/api/tree/:path*",
+        destination: "http://backend:8000/tree/:path*",
+      },
+      // Feature endpoints
+      {
+        source: "/api/repos/:path*",
+        destination: "http://backend:8000/repos/:path*",
+      },
+      {
+        source: "/api/references/:path*",
+        destination: "http://backend:8000/references/:path*",
+      },
+      // Note: /api/summarize is handled by custom API route with extended timeout
     ];
   },
 };

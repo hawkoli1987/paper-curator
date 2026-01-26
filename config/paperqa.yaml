@@ -1,13 +1,37 @@
+# =============================================================================
 # OpenAI-compatible API endpoints
-openai_api_base: "https://transmissively-conidial-fredrick.ngrok-free.dev/v1"  # LLM endpoint
-openai_api_base3: "http://host.docker.internal:8004/v1"  # Embedding endpoint (use host.docker.internal for Docker)
-openai_api_key: "local-key"
+# =============================================================================
+endpoints:
+  llm_base_url: "https://transmissively-conidial-fredrick.ngrok-free.dev/v1"
+  embedding_base_url: "http://host.docker.internal:8004/v1"
+  api_key: "local-key"
 
+# =============================================================================
 # PaperQA2 settings
-paperqa_chunk_chars: 5000
-paperqa_chunk_overlap: 250
-paperqa_use_doc_details: true
-paperqa_evidence_k: 10
-paperqa_evidence_summary_length: "about 100 words"
-paperqa_evidence_skip_summary: false
-paperqa_evidence_relevance_score_cutoff: 1
+# =============================================================================
+paperqa:
+  chunk_chars: 5000
+  chunk_overlap: 250
+  use_doc_details: true
+  evidence_k: 10
+  evidence_summary_length: "about 100 words"
+  evidence_skip_summary: false
+  evidence_relevance_score_cutoff: 1
+
+# =============================================================================
+# UI behavior settings
+# =============================================================================
+ui:
+  hover_debounce_ms: 500
+  max_similar_papers: 5
+  tree_auto_save_interval_ms: 30000  # 30 seconds
+
+# =============================================================================
+# External API settings
+# =============================================================================
+external_apis:
+  papers_with_code_enabled: true
+  github_search_enabled: true
+  semantic_scholar_enabled: true
+  # Optional: GitHub token for higher rate limits
+  # github_token: "ghp_xxxxx"

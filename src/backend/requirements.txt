@@ -16,3 +16,10 @@ pillow
 
 # PaperQA2 for RAG and document processing
 paper-qa
+
+# Database
+psycopg2-binary
+pgvector
+
+# HTTP client for external APIs
+httpx

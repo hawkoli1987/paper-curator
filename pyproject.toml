@@ -23,11 +23,13 @@ dependencies = [
     # PaperQA2 for RAG and document processing
     "paper-qa",
     # HTTP client
-    "requests",
+    "httpx",
+    # Database
+    "psycopg2-binary",
+    "pgvector",
     # Testing
     "pytest",
     "pytest-asyncio",
-    "httpx",
 ]
 
 [project.optional-dependencies]
