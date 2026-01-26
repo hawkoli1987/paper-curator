@@ -11,6 +11,7 @@ if docker ps -a --format '{{.Names}}' | grep -qx "${IMAGE_NAME}"; then
 else
   # Start a new container from the built image with the standard mounts.
   docker run --rm -p "${PORT}:9070" --name "${IMAGE_NAME}" \
+    --add-host host.docker.internal:host-gateway \
     -v "$(pwd)/storage":/app/storage \
     -v "$(pwd)/config":/app/config \
     -v "$(pwd)/prompts":/app/prompts \

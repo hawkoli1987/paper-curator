@@ -90,7 +90,6 @@ This follows your ordering: **(1) package OSS as FastAPI services**, **(2) build
 - **Exit criteria**: services run locally, `/health` passes, scripts succeed end-to-end for 2–3 representative papers.
 
 
-
 ### PaperQA2 findings (from paper-qa/README + code)
 - **What we used naively vs built-in PaperQA2**
   - We manually chunk text and feed `Docs.aadd_texts`; PaperQA2 already provides parsing + chunking (`Docs.aadd` / `Docs.aadd_file`) with configurable chunk size/overlap, metadata validation, and PDF parsing hooks.

@@ -100,11 +100,9 @@ def _load_prompt() -> tuple[str, str, str]:
     return prompt_id, prompt_hash, prompt_body
 
 
-@lru_cache(maxsize=1)
-def _load_config() -> dict[str, Any]:
+@lru_cache(maxsize=4)
+def _load_config_cached(config_mtime: float) -> dict[str, Any]:
     config_path = pathlib.Path("config/paperqa.yaml")
-    if not config_path.exists():
-        raise HTTPException(status_code=500, detail="Config file not found: config/paperqa.yaml")
     config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     required = (
         "openai_api_base",
@@ -117,6 +115,13 @@ def _load_config() -> dict[str, Any]:
         if key not in config:
             raise HTTPException(status_code=500, detail=f"Missing '{key}' in config.")
     return config
+
+
+def _load_config() -> dict[str, Any]:
+    config_path = pathlib.Path("config/paperqa.yaml")
+    if not config_path.exists():
+        raise HTTPException(status_code=500, detail="Config file not found: config/paperqa.yaml")
+    return _load_config_cached(config_path.stat().st_mtime)
 
 
 def _get_openai_client(base_url: str, api_key: str) -> OpenAI:
@@ -192,9 +197,7 @@ def _paperqa_answer(
             parsing_settings = ParsingSettings(
                 reader_config=reader_config,
                 use_doc_details=use_doc_details,
-                multimodal=MultimodalOptions.ON_WITHOUT_ENRICHMENT,
-                enrichment_llm=llm_model,
-                enrichment_llm_config=llm_config,
+                multimodal=MultimodalOptions.OFF,
             )
             answer_settings = AnswerSettings(
                 evidence_k=int(config.get("paperqa_evidence_k", 10)),
@@ -269,7 +272,7 @@ def _paperqa_extract_pdf(pdf_path: pathlib.Path) -> dict[str, Any]:
     parsing_settings = ParsingSettings(
         reader_config=reader_config,
         use_doc_details=bool(config.get("paperqa_use_doc_details", True)),
-        multimodal=MultimodalOptions.ON_WITHOUT_ENRICHMENT,
+        multimodal=MultimodalOptions.OFF,
     )
     settings = Settings(parsing=parsing_settings)
 
