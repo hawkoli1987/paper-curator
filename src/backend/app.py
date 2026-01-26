@@ -739,15 +739,27 @@ async def search_repos(payload: RepoSearchRequest) -> dict[str, Any]:
 # References (Feature 5)
 # =============================================================================
 
-async def _get_semantic_scholar_references(arxiv_id: str) -> list[dict[str, Any]]:
+async def _get_semantic_scholar_references(arxiv_id: str, api_key: Optional[str] = None) -> list[dict[str, Any]]:
     """Get references from Semantic Scholar API."""
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    # Clean arXiv ID (remove version suffix)
+    clean_id = re.sub(r'v\d+$', '', arxiv_id)
+    
+    headers = {}
+    if api_key:
+        headers["x-api-key"] = api_key
+    
+    async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
         # First get the paper ID
-        paper_url = f"https://api.semanticscholar.org/graph/v1/paper/arXiv:{arxiv_id}"
+        paper_url = f"https://api.semanticscholar.org/graph/v1/paper/arXiv:{clean_id}"
         params = {"fields": "references.title,references.authors,references.year,references.externalIds"}
         response = await client.get(paper_url, params=params)
         
+        if response.status_code == 429:
+            print("Semantic Scholar rate limited. Consider adding an API key to config/paperqa.yaml")
+            return []
+        
         if response.status_code != 200:
+            print(f"Semantic Scholar returned {response.status_code}: {response.text[:200]}")
             return []
         
         data = response.json()
@@ -784,7 +796,8 @@ async def fetch_references(payload: ReferencesRequest) -> dict[str, Any]:
     
     # Try Semantic Scholar first
     if apis_config["semantic_scholar_enabled"]:
-        references = await _get_semantic_scholar_references(payload.arxiv_id)
+        api_key = apis_config.get("semantic_scholar_api_key")
+        references = await _get_semantic_scholar_references(payload.arxiv_id, api_key)
     
     # TODO: Add LaTeX parsing fallback
     # TODO: Add PDF text parsing fallback
@@ -859,53 +872,84 @@ def explain_reference(payload: ExplainReferenceRequest) -> dict[str, Any]:
 
 
 # =============================================================================
-# Similar Papers (Feature 6)
+# Similar Papers (Feature 6) - Uses Semantic Scholar Recommendations API
 # =============================================================================
 
+async def _get_semantic_scholar_recommendations(arxiv_id: str, limit: int = 10, api_key: Optional[str] = None) -> list[dict[str, Any]]:
+    """Get paper recommendations from Semantic Scholar API (searches the internet)."""
+    # Clean arXiv ID (remove version suffix like v1, v2)
+    clean_id = re.sub(r'v\d+$', '', arxiv_id)
+    
+    headers = {}
+    if api_key:
+        headers["x-api-key"] = api_key
+    
+    async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
+        # Use the Recommendations API to find similar papers from Semantic Scholar's 200M+ paper database
+        rec_url = f"https://api.semanticscholar.org/recommendations/v1/papers/forpaper/arXiv:{clean_id}"
+        params = {
+            "fields": "title,abstract,authors,year,externalIds,citationCount,url",
+            "limit": limit,
+            "from": "all-cs",  # Search all CS papers, use "recent" for recent papers only
+        }
+        
+        response = await client.get(rec_url, params=params)
+        
+        if response.status_code != 200:
+            print(f"Semantic Scholar Recommendations API returned {response.status_code}: {response.text}")
+            return []
+        
+        data = response.json()
+        recommendations = []
+        
+        for paper in data.get("recommendedPapers", []):
+            arxiv_ref_id = None
+            external_ids = paper.get("externalIds", {})
+            if external_ids and "ArXiv" in external_ids:
+                arxiv_ref_id = external_ids["ArXiv"]
+            
+            authors = [a.get("name", "") for a in paper.get("authors", [])]
+            recommendations.append({
+                "arxiv_id": arxiv_ref_id,
+                "title": paper.get("title", "Unknown"),
+                "abstract": paper.get("abstract", ""),
+                "authors": authors,
+                "year": paper.get("year"),
+                "citation_count": paper.get("citationCount", 0),
+                "url": paper.get("url", ""),
+                "source": "semantic_scholar",
+            })
+        
+        return recommendations
+
+
 @app.post("/papers/similar")
-def find_similar_papers(payload: SimilarPapersRequest) -> dict[str, Any]:
-    """Find similar papers using embedding similarity."""
-    paper = db.get_paper_by_arxiv_id(payload.arxiv_id)
-    if not paper:
-        raise HTTPException(status_code=404, detail="Paper not found in database")
-    
-    # Check cache
-    cached = db.get_cached_similar_papers(paper["id"])
-    if cached:
-        return {"similar_papers": cached, "from_cache": True}
-    
-    # Get or compute embedding
-    embedding = paper.get("embedding")
-    if embedding is None:
-        # Compute embedding from abstract + title
-        text = f"{paper['title']}\n\n{paper.get('abstract', '')}"
-        endpoint_config = _get_endpoint_config()
-        base_url = endpoint_config["embedding_base_url"]
-        api_key = endpoint_config["api_key"]
-        model = _resolve_model(base_url, api_key)
-        client = _get_openai_client(base_url, api_key)
-        
-        response = client.embeddings.create(model=model, input=text)
-        embedding = response.data[0].embedding
-        
-        # Save embedding
-        db.update_paper_embedding(paper["id"], embedding)
-    
-    # Find similar papers
+async def find_similar_papers(payload: SimilarPapersRequest) -> dict[str, Any]:
+    """Find similar papers using Semantic Scholar Recommendations API (searches internet)."""
+    # Get UI config for limit
     ui_config = _get_ui_config()
-    similar = db.find_similar_papers(
-        embedding=embedding,
-        limit=ui_config["max_similar_papers"],
-        exclude_id=paper["id"],
-    )
+    limit = ui_config.get("max_similar_papers", 10)
     
-    # Cache results
-    for s in similar:
-        db.cache_similar_paper(
-            paper_id=paper["id"],
-            similar_arxiv_id=s.get("arxiv_id"),
-            similar_title=s["title"],
-            similarity_score=s.get("similarity"),
-        )
+    # Check cache first (optional - paper may not be in local DB)
+    paper = db.get_paper_by_arxiv_id(payload.arxiv_id)
+    if paper:
+        cached = db.get_cached_similar_papers(paper["id"])
+        if cached:
+            return {"similar_papers": cached, "from_cache": True}
+    
+    # Query Semantic Scholar Recommendations API (searches the internet)
+    apis_config = _get_external_apis_config()
+    api_key = apis_config.get("semantic_scholar_api_key")
+    similar = await _get_semantic_scholar_recommendations(payload.arxiv_id, limit, api_key)
+    
+    # Cache results if paper is in our DB
+    if paper and similar:
+        for s in similar:
+            db.cache_similar_paper(
+                paper_id=paper["id"],
+                similar_arxiv_id=s.get("arxiv_id"),
+                similar_title=s["title"],
+                similarity_score=None,  # No similarity score from API
+            )
     
     return {"similar_papers": similar, "from_cache": False}

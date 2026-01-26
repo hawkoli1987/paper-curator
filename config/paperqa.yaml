@@ -35,3 +35,6 @@ external_apis:
   semantic_scholar_enabled: true
   # Optional: GitHub token for higher rate limits
   # github_token: "ghp_xxxxx"
+  # Optional: Semantic Scholar API key for higher rate limits
+  # Get one free at: https://www.semanticscholar.org/product/api#api-key-form
+  # semantic_scholar_api_key: "xxx"

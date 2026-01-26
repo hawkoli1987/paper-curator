@@ -45,10 +45,15 @@ interface Reference {
 }
 
 interface SimilarPaper {
-  arxiv_id: string;
+  arxiv_id?: string;
   title: string;
-  similarity: number;
+  similarity?: number;
   authors?: string[];
+  abstract?: string;
+  year?: number;
+  citation_count?: number;
+  url?: string;
+  source?: string;
 }
 
 interface ContextMenuState {
@@ -109,8 +114,17 @@ export default function Home() {
   const [isLoadingFeature, setIsLoadingFeature] = useState(false);
   const [hoveredRefId, setHoveredRefId] = useState<number | null>(null);
   const [refExplanations, setRefExplanations] = useState<Record<number, string>>({});
+  const [featureLog, setFeatureLog] = useState<string[]>([]);
   
   const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Helper to add to feature log
+  const logFeature = (message: string) => {
+    const timestamp = new Date().toLocaleTimeString();
+    setFeatureLog((prev) => [...prev, `[${timestamp}] ${message}`]);
+  };
+  
+  const clearFeatureLog = () => setFeatureLog([]);
 
   // Load config and tree on mount
   useEffect(() => {
@@ -383,86 +397,171 @@ export default function Home() {
 
   // Feature handlers
   const handleFindRepos = async (node: PaperNode) => {
-    if (!node.attributes?.arxivId) return;
+    if (!node.attributes?.arxivId) {
+      logFeature("Error: No arXiv ID found for this paper");
+      return;
+    }
+    clearFeatureLog();
     setSelectedNode(node);
     setActivePanel("repos");
     setIsLoadingFeature(true);
     setRepos([]);
     
+    const arxivId = node.attributes.arxivId;
+    const title = node.attributes.title || node.name;
+    
+    logFeature(`Starting GitHub repo search for: ${arxivId}`);
+    logFeature(`Paper title: ${title}`);
+    logFeature("Step 1: Querying Papers With Code API...");
+    
     try {
       const res = await fetch("/api/repos/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          arxiv_id: node.attributes.arxivId,
-          title: node.attributes.title,
-        }),
+        body: JSON.stringify({ arxiv_id: arxivId, title }),
       });
+      
       if (res.ok) {
         const data = await res.json();
-        setRepos(data.repos || []);
+        const repos = data.repos || [];
+        setRepos(repos);
+        
+        if (data.from_cache) {
+          logFeature("Retrieved from cache");
+        } else {
+          logFeature("Step 2: Querying GitHub Search API...");
+        }
+        
+        if (repos.length > 0) {
+          logFeature(`✓ Found ${repos.length} repositories`);
+          const official = repos.filter((r: RepoResult) => r.is_official);
+          if (official.length > 0) {
+            logFeature(`  - ${official.length} official repo(s)`);
+          }
+        } else {
+          logFeature("✗ No repositories found");
+        }
+      } else {
+        logFeature(`✗ Error: HTTP ${res.status}`);
       }
     } catch (e) {
+      logFeature(`✗ Error: ${e}`);
       console.error("Failed to fetch repos:", e);
     } finally {
       setIsLoadingFeature(false);
+      logFeature("Done");
     }
   };
 
   const handleFetchReferences = async (node: PaperNode) => {
-    if (!node.attributes?.arxivId) return;
+    if (!node.attributes?.arxivId) {
+      logFeature("Error: No arXiv ID found for this paper");
+      return;
+    }
+    clearFeatureLog();
     setSelectedNode(node);
     setActivePanel("references");
     setIsLoadingFeature(true);
     setReferences([]);
     setRefExplanations({});
     
+    const arxivId = node.attributes.arxivId;
+    logFeature(`Starting reference extraction for: ${arxivId}`);
+    logFeature("Step 1: Querying Semantic Scholar API...");
+    
     try {
       const res = await fetch("/api/references/fetch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ arxiv_id: node.attributes.arxivId }),
+        body: JSON.stringify({ arxiv_id: arxivId }),
       });
+      
       if (res.ok) {
         const data = await res.json();
-        setReferences(data.references || []);
+        const refs = data.references || [];
+        setReferences(refs);
+        
+        if (data.from_cache) {
+          logFeature("Retrieved from cache");
+        }
+        
         // Pre-populate cached explanations
         const cached: Record<number, string> = {};
-        for (const ref of data.references || []) {
+        for (const ref of refs) {
           if (ref.explanation) {
             cached[ref.id] = ref.explanation;
           }
         }
         setRefExplanations(cached);
+        
+        if (refs.length > 0) {
+          logFeature(`✓ Found ${refs.length} references`);
+          const withArxiv = refs.filter((r: Reference) => r.cited_arxiv_id);
+          logFeature(`  - ${withArxiv.length} with arXiv IDs`);
+        } else {
+          logFeature("✗ No references found");
+        }
+      } else {
+        logFeature(`✗ Error: HTTP ${res.status}`);
       }
     } catch (e) {
+      logFeature(`✗ Error: ${e}`);
       console.error("Failed to fetch references:", e);
     } finally {
       setIsLoadingFeature(false);
+      logFeature("Hover over references for LLM explanations");
+      logFeature("Done");
     }
   };
 
   const handleFindSimilar = async (node: PaperNode) => {
-    if (!node.attributes?.arxivId) return;
+    if (!node.attributes?.arxivId) {
+      logFeature("Error: No arXiv ID found for this paper");
+      return;
+    }
+    clearFeatureLog();
     setSelectedNode(node);
     setActivePanel("similar");
     setIsLoadingFeature(true);
     setSimilarPapers([]);
     
+    const arxivId = node.attributes.arxivId;
+    logFeature(`Starting similar paper search for: ${arxivId}`);
+    logFeature("Step 1: Querying Semantic Scholar Recommendations API...");
+    logFeature("Searching 200M+ papers on the internet...");
+    
     try {
       const res = await fetch("/api/papers/similar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ arxiv_id: node.attributes.arxivId }),
+        body: JSON.stringify({ arxiv_id: arxivId }),
       });
+      
       if (res.ok) {
         const data = await res.json();
-        setSimilarPapers(data.similar_papers || []);
+        const papers = data.similar_papers || [];
+        setSimilarPapers(papers);
+        
+        if (data.from_cache) {
+          logFeature("Retrieved from cache");
+        }
+        
+        if (papers.length > 0) {
+          logFeature(`✓ Found ${papers.length} similar papers`);
+          const withArxiv = papers.filter((p: SimilarPaper) => p.arxiv_id);
+          logFeature(`  - ${withArxiv.length} available on arXiv`);
+        } else {
+          logFeature("✗ No similar papers found");
+        }
+      } else {
+        logFeature(`✗ Error: HTTP ${res.status}`);
       }
     } catch (e) {
+      logFeature(`✗ Error: ${e}`);
       console.error("Failed to find similar papers:", e);
     } finally {
       setIsLoadingFeature(false);
+      logFeature("Done");
     }
   };
 
@@ -762,6 +861,44 @@ export default function Home() {
           </div>
         )}
 
+        {/* Feature Progress Log */}
+        {featureLog.length > 0 && (
+          <div style={{ 
+            marginBottom: "1rem", 
+            backgroundColor: "#1a1a2e", 
+            padding: "0.75rem", 
+            borderRadius: "8px", 
+            fontFamily: "monospace",
+            fontSize: "0.75rem",
+            maxHeight: "150px",
+            overflowY: "auto",
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+              <span style={{ color: "#10b981", fontWeight: 600 }}>Feature Log</span>
+              <button 
+                onClick={clearFeatureLog}
+                style={{ 
+                  background: "none", 
+                  border: "none", 
+                  color: "#666", 
+                  cursor: "pointer",
+                  fontSize: "0.625rem",
+                }}
+              >
+                Clear
+              </button>
+            </div>
+            {featureLog.map((log, i) => (
+              <div key={i} style={{ 
+                color: log.includes("✓") ? "#10b981" : log.includes("✗") ? "#ef4444" : log.includes("Error") ? "#ef4444" : "#e5e5e5",
+                lineHeight: 1.5,
+              }}>
+                {log}
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Dynamic panel content */}
         <div style={{ flex: 1, backgroundColor: "white", padding: "1rem", borderRadius: "8px", border: "1px solid #e5e5e5", overflowY: "auto" }}>
           {/* Details Panel */}
@@ -914,16 +1051,37 @@ export default function Home() {
           {activePanel === "similar" && (
             <>
               <h2 style={{ marginTop: 0, fontSize: "1.125rem", fontWeight: 600 }}>Similar Papers</h2>
+              <p style={{ fontSize: "0.75rem", color: "#666", marginBottom: "1rem" }}>
+                Recommended papers from Semantic Scholar (200M+ papers)
+              </p>
               {isLoadingFeature ? (
-                <p style={{ color: "#666" }}>Finding similar papers...</p>
+                <p style={{ color: "#666" }}>Searching the internet for similar papers...</p>
               ) : similarPapers.length > 0 ? (
                 <div>
                   {similarPapers.map((paper, i) => (
                     <div key={i} style={{ padding: "0.75rem", borderBottom: "1px solid #eee" }}>
-                      <div style={{ fontSize: "0.875rem", fontWeight: 500 }}>{paper.title}</div>
-                      <div style={{ fontSize: "0.75rem", color: "#666", marginTop: "0.25rem" }}>
-                        Similarity: {((paper.similarity || 0) * 100).toFixed(1)}%
+                      <div style={{ fontSize: "0.875rem", fontWeight: 500 }}>
+                        {paper.url ? (
+                          <a href={paper.url} target="_blank" rel="noopener noreferrer" style={{ color: "#0070f3" }}>
+                            {paper.title}
+                          </a>
+                        ) : paper.title}
                       </div>
+                      <div style={{ fontSize: "0.75rem", color: "#666", marginTop: "0.25rem" }}>
+                        {paper.year && <span>Year: {paper.year}</span>}
+                        {paper.citation_count !== undefined && (
+                          <span style={{ marginLeft: "0.5rem" }}>Citations: {paper.citation_count}</span>
+                        )}
+                        {paper.arxiv_id && (
+                          <span style={{ marginLeft: "0.5rem" }}>arXiv: {paper.arxiv_id}</span>
+                        )}
+                      </div>
+                      {paper.authors && paper.authors.length > 0 && (
+                        <div style={{ fontSize: "0.75rem", color: "#888", marginTop: "0.25rem" }}>
+                          {paper.authors.slice(0, 3).join(", ")}
+                          {paper.authors.length > 3 && ` +${paper.authors.length - 3} more`}
+                        </div>
+                      )}
                       {paper.arxiv_id && (
                         <button
                           onClick={() => handleAddSimilarPaper(paper)}
