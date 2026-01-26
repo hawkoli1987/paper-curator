@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import os
 import pathlib
+import re
 from functools import lru_cache
 from typing import Any, Optional
 
@@ -11,29 +12,17 @@ import arxiv
 import yaml
 from fastapi import FastAPI, HTTPException
 from openai import OpenAI
+from paperqa import Docs
+from paperqa.readers import read_doc
+from paperqa.settings import (
+    AnswerSettings,
+    MultimodalOptions,
+    ParsingSettings,
+    Settings,
+    make_default_litellm_model_list_settings,
+)
+from paperqa.types import Doc
 from pydantic import BaseModel, Field
-
-try:
-    from paperqa import Docs
-    from paperqa.readers import read_doc
-    from paperqa.settings import (
-        AnswerSettings,
-        ParsingSettings,
-        Settings,
-        make_default_litellm_model_list_settings,
-        MultimodalOptions,
-    )
-    from paperqa.types import Doc
-except Exception:  # noqa: BLE001
-    Docs = None
-    read_doc = None
-    AnswerSettings = None
-    ParsingSettings = None
-    Settings = None
-    make_default_litellm_model_list_settings = None
-    MultimodalOptions = None
-    Doc = None
-
 
 app = FastAPI(title="paper-curator-backend")
 
@@ -74,11 +63,9 @@ def _require_identifier(arxiv_id: Optional[str], url: Optional[str]) -> str:
         return arxiv_id
     if url:
         # Parse arXiv ID from URL (e.g., https://arxiv.org/abs/1706.03762)
-        import re
         match = re.search(r"arxiv\.org/(?:abs|pdf)/([^/\s?]+)", url)
         if match:
             return match.group(1).replace(".pdf", "")
-        # Fallback: assume URL is just the ID
         return url
     raise HTTPException(status_code=400, detail="Provide arxiv_id or url.")
 
@@ -146,19 +133,7 @@ def _paperqa_answer(
     llm_model: str,
     embed_model: str,
 ) -> str:
-    if Docs is None:
-        raise HTTPException(status_code=500, detail="paper-qa is not installed.")
-    if (
-        Doc is None
-        or Settings is None
-        or ParsingSettings is None
-        or AnswerSettings is None
-        or make_default_litellm_model_list_settings is None
-        or MultimodalOptions is None
-    ):
-        raise HTTPException(status_code=500, detail="paper-qa types are not available.")
-    if not text and not pdf_path:
-        raise HTTPException(status_code=400, detail="Provide text or pdf_path.")
+    assert text or pdf_path, "Provide text or pdf_path."
     os.environ["OPENAI_API_BASE"] = llm_base_url
     os.environ["OPENAI_API_KEY"] = api_key
 
@@ -251,17 +226,6 @@ def _paperqa_answer(
 
 def _paperqa_extract_pdf(pdf_path: pathlib.Path) -> dict[str, Any]:
     """Extract text from PDF using PaperQA2's native parser."""
-    if (
-        Docs is None
-        or Settings is None
-        or ParsingSettings is None
-        or AnswerSettings is None
-        or read_doc is None
-        or MultimodalOptions is None
-    ):
-        raise HTTPException(status_code=500, detail="paper-qa is not installed.")
-    if Doc is None:
-        raise HTTPException(status_code=500, detail="paper-qa types are not available.")
     config = _load_config()
     reader_config = {
         "chunk_chars": int(config.get("paperqa_chunk_chars", 5000)),

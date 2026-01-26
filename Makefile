@@ -16,15 +16,16 @@ $(VENV_DIR)/bin/activate: pyproject.toml
 
 # Run pytest tests
 test: install
-	$(ACTIVATE) && pytest tests -v
+	pytest tests -v
 
 # Start docker-compose stack (frontend + backend)
 run:
 	docker compose -f src/compose.yml up --build
 
 # Run backend locally with uvicorn (for development)
-run-local: install
-	$(ACTIVATE) && cd src/backend && uvicorn app:app --reload --host 0.0.0.0 --port 8000
+# Assumes .venv is already activated
+run-local:
+	cd src/backend && uvicorn app:app --reload --host 0.0.0.0 --port 8000
 
 # Build docker images without starting
 docker-build:
