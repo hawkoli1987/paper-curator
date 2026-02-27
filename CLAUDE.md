@@ -25,10 +25,13 @@ PYTHONPATH=src/backend .venv/bin/uvicorn app:app --app-dir src/backend --host 0.
 - `PYTHONPATH=src/backend` — lets Python resolve intra-backend imports (`import db`, `import config`, etc.).
 - **No `--reload`** — the server does NOT auto-reload on code changes. **Every code modification requires a manual restart.**
 
-**After any code change, always:**
+**After any backend code change, always:**
 1. Send `C-c` to `server2` to stop the running server.
 2. Re-send the startup command above.
 3. Wait for the server to be healthy: `curl http://127.0.0.1:3100/health`
+4. Tell the user: **"Server restarted — please test from the frontend."**
+
+Skipping the restart means the old code keeps running and changes have no effect. Always complete the restart before reporting the task as done.
 
 **Verify the right backend is running** (quick smoke test after restart):
 ```bash
@@ -67,11 +70,12 @@ make pull-slack
 ### Testing
 
 ```bash
-# All tests except integration
+# All tests (validation + functional + e2e) except integration — the standard full run
 make test
-# or: BACKEND_URL=http://localhost:3100 pytest tests -v --ignore=tests/integration
+# Fast run skipping LLM-dependent tests:
+SKIP_LLM=1 make test
 
-# By category
+# By category (for focused debugging only — not a substitute for the full run)
 make test validation     # Connectivity + input validation (fast, no LLM)
 make test functional     # Single-capability tests (requires backend + LLM)
 make test integration    # End-to-end workflows (auto-switches to test DB)
@@ -84,11 +88,17 @@ make test-db-init        # Create paper_curator_test DB
 make test-db-reset       # Drop and recreate test DB
 ```
 
+**Testing conventions:**
+- `make test` always includes e2e tests — do **not** add separate `make test e2e` or similar targets.
+- e2e tests run against the production database; they are the primary regression gate for all endpoints.
+- `SKIP_LLM=1` skips LLM-dependent tests for speed; always run without it before marking a task done.
+
 Test categories require different services:
 | Category | Backend | LLM | Database |
 |---|---|---|---|
 | validation | For connectivity tests | No | Production |
 | functional | Yes | Yes | Production |
+| e2e | Yes | Yes (skippable) | Production |
 | integration | Yes | Yes | Test DB (auto-switched) |
 
 ## Architecture

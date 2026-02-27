@@ -6,7 +6,7 @@ ACTIVATE := source $(VENV_DIR)/bin/activate
 .PHONY: install install-frontend test run clean docker-build docker-run \
         singularity-build singularity-run singularity-stop pull-slack \
         test-db-init test-db-reset \
-        validation functional integration e2e
+        validation functional integration
 
 # Create virtual environment and install all dependencies
 install: $(VENV_DIR)/bin/activate install-frontend
@@ -27,11 +27,13 @@ install-frontend:
 # Testing (assumes .venv is activated in tmux)
 # =============================================================================
 # Usage: make test [type]
-#   make test                 - Run all tests (except integration)
+#   make test                 - Run ALL tests (validation + functional + e2e; except integration)
 #   make test validation      - Run validation tests only
 #   make test functional      - Run functional tests only
 #   make test integration     - Run integration tests (auto-switches to test DB)
-#   make test e2e             - Run e2e tests against production DB
+#
+# e2e tests are always included in the default 'make test' run (not a separate target).
+# LLM-dependent e2e tests can be skipped for fast runs: SKIP_LLM=1 make test
 #
 # The integration tests automatically:
 #   1. Create paper_curator_test DB if it doesn't exist (via /db/init)
@@ -42,7 +44,6 @@ install-frontend:
 # The e2e tests run against the PRODUCTION database:
 #   - Read-only tests run freely
 #   - Write tests create isolated data and clean up after themselves
-#   - LLM tests can be skipped: SKIP_LLM=1 make test e2e
 
 BACKEND_URL ?= http://localhost:3100
 TEST_DB_NAME := paper_curator_test
@@ -58,15 +59,12 @@ else ifeq ($(TEST_TYPE),functional)
 else ifeq ($(TEST_TYPE),integration)
 	@echo "=== Running integration tests (using test DB: $(TEST_DB_NAME)) ==="
 	BACKEND_URL=$(BACKEND_URL) TEST_DB_NAME=$(TEST_DB_NAME) pytest tests/integration -v -s
-else ifeq ($(TEST_TYPE),e2e)
-	@echo "=== Running e2e tests against production DB ==="
-	BACKEND_URL=$(BACKEND_URL) SKIP_LLM=$(SKIP_LLM) pytest tests/e2e -v -s
 else
-	@echo "=== Running all tests (except integration and deprecated) ==="
-	BACKEND_URL=$(BACKEND_URL) pytest tests -v --ignore=tests/integration --ignore=tests/deprecated
+	@echo "=== Running all tests: validation + functional + e2e (except integration and deprecated) ==="
+	BACKEND_URL=$(BACKEND_URL) SKIP_LLM=$(SKIP_LLM) pytest tests -v -s --ignore=tests/integration --ignore=tests/deprecated
 endif
 
-validation functional integration e2e:
+validation functional integration:
 	@:
 
 test-db-init:
