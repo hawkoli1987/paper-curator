@@ -6,7 +6,7 @@ ACTIVATE := source $(VENV_DIR)/bin/activate
 .PHONY: install install-frontend test run clean docker-build docker-run \
         singularity-build singularity-run singularity-stop pull-slack \
         test-db-init test-db-reset \
-        validation functional integration
+        validation functional integration e2e
 
 # Create virtual environment and install all dependencies
 install: $(VENV_DIR)/bin/activate install-frontend
@@ -31,12 +31,18 @@ install-frontend:
 #   make test validation      - Run validation tests only
 #   make test functional      - Run functional tests only
 #   make test integration     - Run integration tests (auto-switches to test DB)
+#   make test e2e             - Run e2e tests against production DB
 #
 # The integration tests automatically:
 #   1. Create paper_curator_test DB if it doesn't exist (via /db/init)
 #   2. Switch the backend to paper_curator_test (via /db/switch)
 #   3. Run tests against the clean test database
 #   4. Switch the backend back to paper_curator (production)
+#
+# The e2e tests run against the PRODUCTION database:
+#   - Read-only tests run freely
+#   - Write tests create isolated data and clean up after themselves
+#   - LLM tests can be skipped: SKIP_LLM=1 make test e2e
 
 BACKEND_URL ?= http://localhost:3100
 TEST_DB_NAME := paper_curator_test
@@ -52,12 +58,15 @@ else ifeq ($(TEST_TYPE),functional)
 else ifeq ($(TEST_TYPE),integration)
 	@echo "=== Running integration tests (using test DB: $(TEST_DB_NAME)) ==="
 	BACKEND_URL=$(BACKEND_URL) TEST_DB_NAME=$(TEST_DB_NAME) pytest tests/integration -v -s
+else ifeq ($(TEST_TYPE),e2e)
+	@echo "=== Running e2e tests against production DB ==="
+	BACKEND_URL=$(BACKEND_URL) SKIP_LLM=$(SKIP_LLM) pytest tests/e2e -v -s
 else
 	@echo "=== Running all tests (except integration and deprecated) ==="
 	BACKEND_URL=$(BACKEND_URL) pytest tests -v --ignore=tests/integration --ignore=tests/deprecated
 endif
 
-validation functional integration:
+validation functional integration e2e:
 	@:
 
 test-db-init:

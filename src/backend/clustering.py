@@ -600,7 +600,7 @@ def build_tree_from_clusters() -> dict[str, Any]:
     # Log debug info (visible in container logs)
     print(f"=== CLUSTERING DEBUG: branching_factor={branching_factor}, total_papers={len(papers_with_embeddings)} ===", flush=True)
     for decision in builder.debug_log:
-        print(f"K-selection: {json.dumps(decision)}", flush=True)
+        print(f"K-selection: {json.dumps(decision, default=lambda o: float(o) if hasattr(o, 'item') else str(o))}", flush=True)
     
     # Count total nodes in tree
     def count_nodes(node: dict[str, Any]) -> int:
