@@ -16,27 +16,13 @@ From: python:3.11-slim
     mkdir -p /app /app/storage /app/config /app/prompts
 
 %files
-    # Copy all backend files explicitly
+    # Only requirements.txt is needed at build time; source is bind-mounted at runtime
     src/backend/requirements.txt /app/requirements.txt
-    src/backend/__init__.py /app/__init__.py
-    src/backend/app.py /app/app.py
-    src/backend/pdf_patch.py /app/pdf_patch.py
-    src/backend/arxiv_helpers.py /app/arxiv_helpers.py
-    src/backend/clustering.py /app/clustering.py
-    src/backend/config.py /app/config.py
-    src/backend/db.py /app/db.py
-    src/backend/external_clients.py /app/external_clients.py
-    src/backend/init.sql /app/init.sql
-    src/backend/llm_clients.py /app/llm_clients.py
-    src/backend/naming.py /app/naming.py
-    src/backend/paperqa_helpers.py /app/paperqa_helpers.py
-    src/backend/slack_helpers.py /app/slack_helpers.py
-    src/backend/litellm_patch.py /app/litellm_patch.py
-    src/backend/prompts /app/prompts
 
 %post
     # Install Python dependencies
     pip install --no-cache-dir -r /app/requirements.txt
+    rm /app/requirements.txt
 
 %environment
     export PYTHONUNBUFFERED=1

@@ -22,6 +22,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     volumes:
+      - ./backend:/app            # live source mount — code changes apply without rebuild
       - ../storage:/app/storage
       - ../config:/app/config
       # Mount home directory for batch ingest of local PDFs
