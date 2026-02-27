@@ -442,7 +442,8 @@ class AsyncTreeNamer:
                     max_tokens=50,
                     temperature=0.7,  # Higher temperature for variety on re-naming
                 )
-                
+                if not response.choices:
+                    raise RuntimeError(f"LLM returned empty response for node {node_id}")
                 response_text = response.choices[0].message.content
                 raw_name = response_text.strip().strip('"\'')
                 new_name = self._sanitize_name(raw_name)
@@ -728,7 +729,8 @@ async def rename_single_category(
         max_tokens=50,
         temperature=temperature,
     )
-    
+    if not response.choices:
+        raise HTTPException(status_code=502, detail="LLM returned empty response (choices=[])")
     raw_name = response.choices[0].message.content.strip().strip('"\'')
     new_name = AsyncTreeNamer._sanitize_name(raw_name)
     

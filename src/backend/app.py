@@ -378,6 +378,8 @@ async def summarize_structured(payload: StructuredSummarizeRequest) -> dict[str,
             await rag.index_paper_async(_paper["id"], payload.pdf_path, embed_client, embed_model)
         elif not _paper:
             _pid = db.create_paper(arxiv_id=payload.arxiv_id, title=f"Paper {payload.arxiv_id}", authors=[], pdf_path=payload.pdf_path)
+            if _pid is None:
+                raise HTTPException(status_code=500, detail=f"Failed to create DB record for {payload.arxiv_id}")
             await rag.index_paper_async(_pid, payload.pdf_path, embed_client, embed_model)
     
     # Step 1: Extract components using RAG
@@ -698,8 +700,10 @@ async def merge_qa_to_summary(payload: MergeSummaryRequest) -> dict[str, Any]:
         max_tokens=4000,
         temperature=0.3,
     )
+    if not response.choices:
+        raise HTTPException(status_code=502, detail="LLM returned empty response (choices=[])")
     updated_summary = response.choices[0].message.content.strip()
-    
+
     # Update summary in database
     db.update_paper_summary(paper["id"], updated_summary)
     
@@ -742,8 +746,10 @@ async def dedup_summary(payload: DedupSummaryRequest) -> dict[str, Any]:
         max_tokens=4000,
         temperature=0.1,
     )
+    if not response.choices:
+        raise HTTPException(status_code=502, detail="LLM returned empty response (choices=[])")
     deduped_summary = response.choices[0].message.content.strip()
-    
+
     # Update summary in database
     db.update_paper_summary(paper["id"], deduped_summary)
     
@@ -778,6 +784,8 @@ async def classify(payload: ClassifyRequest) -> dict[str, Any]:
         max_tokens=50,
         temperature=0.1,
     )
+    if not response.choices:
+        raise HTTPException(status_code=502, detail="LLM returned empty response (choices=[])")
     category = response.choices[0].message.content.strip()
     return {"category": category, "model": model}
 
@@ -803,6 +811,8 @@ async def abbreviate(payload: AbbreviateRequest) -> dict[str, Any]:
         max_tokens=20,
         temperature=0.1,
     )
+    if not response.choices:
+        raise HTTPException(status_code=502, detail="LLM returned empty response (choices=[])")
     abbrev = response.choices[0].message.content.strip()
     # Clean up any quotes or extra formatting
     abbrev = abbrev.strip('"\'').strip()
@@ -845,6 +855,8 @@ async def reabbreviate_paper(payload: ReabbreviateRequest) -> dict[str, Any]:
             max_tokens=20,
             temperature=0.7,  # Higher temperature for variety on re-runs
         )
+        if not response.choices:
+            raise HTTPException(status_code=502, detail="LLM returned empty response (choices=[])")
         abbrev = response.choices[0].message.content.strip().strip('"\'').strip()
     
     # Store abbreviation in papers table
@@ -872,24 +884,29 @@ async def reabbreviate_all_papers() -> dict[str, Any]:
     model = _resolve_model(base_url, api_key)
     client = _get_async_openai_client(base_url, api_key)
     
+    sem = asyncio.Semaphore(3)
+
     async def abbreviate_one(paper: dict) -> dict[str, Any]:
-        prompt = get_prompt("abbreviate", title=paper["title"])
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=20,
-            temperature=0.1,
-        )
-        abbrev = response.choices[0].message.content.strip().strip('"\'').strip()
-        # Store abbreviation in papers table
-        db.update_paper_abbreviation(paper["id"], abbrev)
-        # Update tree node name
-        node_id = db.find_paper_node_id(paper["id"])
-        if node_id:
-            db.update_tree_node_name(node_id, abbrev)
-        return {"arxiv_id": paper["arxiv_id"], "abbreviation": abbrev}
-    
-    # Run all abbreviations in parallel
+        async with sem:
+            prompt = get_prompt("abbreviate", title=paper["title"])
+            response = await client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=20,
+                temperature=0.1,
+            )
+            if not response.choices:
+                raise HTTPException(status_code=502, detail="LLM returned empty response (choices=[])")
+            abbrev = response.choices[0].message.content.strip().strip('"\'').strip()
+            # Store abbreviation in papers table
+            db.update_paper_abbreviation(paper["id"], abbrev)
+            # Update tree node name
+            node_id = db.find_paper_node_id(paper["id"])
+            if node_id:
+                db.update_tree_node_name(node_id, abbrev)
+            return {"arxiv_id": paper["arxiv_id"], "abbreviation": abbrev}
+
+    # Run with bounded concurrency (max 3 simultaneous LLM requests)
     results = await asyncio.gather(*[abbreviate_one(p) for p in papers])
     
     return {"updated": len(results), "results": results}
@@ -1407,6 +1424,8 @@ async def batch_ingest(payload: BatchIngestRequest) -> dict[str, Any]:
                                 max_tokens=20,
                                 temperature=0.1,
                             )
+                            if not abbrev_resp.choices:
+                                raise RuntimeError(f"LLM returned empty response for abbreviation of {arxiv_id}")
                             abbreviation = abbrev_resp.choices[0].message.content.strip().strip('"\'')
                             log_progress(f"  [{arxiv_id}] ✓ Abbreviation: {abbreviation}")
                             
@@ -1419,6 +1438,8 @@ async def batch_ingest(payload: BatchIngestRequest) -> dict[str, Any]:
                                 abstract=abstract[:1000],
                                 pdf_path=pdf_path,
                             )
+                            if db_paper_id is None:
+                                raise RuntimeError(f"Failed to create DB record for {arxiv_id}")
                             
                             # 5. Summarize using RAG (auto-indexes: chunks + embedding)
                             log_progress(f"  [{arxiv_id}] Summarizing paper...")
@@ -1578,8 +1599,10 @@ async def batch_ingest(payload: BatchIngestRequest) -> dict[str, Any]:
                             max_tokens=20,
                             temperature=0.1,
                         )
+                        if not abbrev_resp.choices:
+                            raise RuntimeError(f"LLM returned empty response for abbreviation of {paper_id}")
                         abbreviation = abbrev_resp.choices[0].message.content.strip().strip('"\'')
-                        
+
                         # Create paper in DB first (without summary)
                         db_paper_id = db.create_paper(
                             arxiv_id=paper_id,
@@ -1588,7 +1611,9 @@ async def batch_ingest(payload: BatchIngestRequest) -> dict[str, Any]:
                             abstract=first_chunk[:1000],
                             pdf_path=pdf_path,
                         )
-                        
+                        if db_paper_id is None:
+                            raise RuntimeError(f"Failed to create DB record for {paper_id}")
+
                         # Summarize using RAG (will auto-index chunks)
                         prompt_id, prompt_hash, prompt_body = _load_prompt()
                         summary = await rag.rag_answer_async(
@@ -1704,7 +1729,10 @@ async def classify_papers() -> dict[str, Any]:
     
     # Step 2: Build tree structure using clustering (run in thread to avoid blocking event loop)
     cluster_result = await asyncio.to_thread(clustering.build_tree_from_clusters)
-    
+
+    if cluster_result is None:
+        raise HTTPException(status_code=500, detail="Clustering failed: build_tree_from_clusters returned None")
+
     if cluster_result["total_papers"] < 2:
         return {
             "message": cluster_result.get("message", "Not enough papers with embeddings"),
@@ -2129,8 +2157,10 @@ async def explain_reference(payload: ExplainReferenceRequest) -> dict[str, Any]:
         max_tokens=200,
         temperature=0.3,
     )
+    if not response.choices:
+        raise HTTPException(status_code=502, detail="LLM returned empty response (choices=[])")
     explanation = response.choices[0].message.content.strip()
-    
+
     # Cache the explanation
     if payload.reference_id:
         db.update_reference_explanation(payload.reference_id, explanation)
@@ -2593,7 +2623,8 @@ Please synthesize these responses into a coherent, comprehensive answer.
         max_tokens=2000,
         temperature=0.3,
     )
-    
+    if not response.choices:
+        raise HTTPException(status_code=502, detail="LLM returned empty response (choices=[])")
     final_answer = response.choices[0].message.content.strip()
     
     # Save to database
