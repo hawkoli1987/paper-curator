@@ -16,13 +16,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 cd /scratch_aisg/SPEC-SF-AISG/yuli/ARF-Training/repos/paper-curator
-PYTHONPATH=src/backend .venv/bin/uvicorn app:app --app-dir src/backend --host 0.0.0.0 --port 3100
+PYTHONPATH=src/backend .venv/bin/uvicorn app:app --app-dir src/backend --host 0.0.0.0 --port 3100 2>&1 | tee logs/backend.log
 ```
 
 **Why this exact form matters:**
 - `cd` to the ARF-Training repo first — `--app-dir src/backend` is resolved relative to CWD, so the correct `app.py` and modules are loaded.
 - Use `.venv/bin/uvicorn` (explicit repo-local path) — the `server2` shell may have a different repo's venv on PATH; bare `uvicorn` picks up the wrong one.
 - `PYTHONPATH=src/backend` — lets Python resolve intra-backend imports (`import db`, `import config`, etc.).
+- `2>&1 | tee logs/backend.log` — captures all stdout+stderr to `logs/backend.log` **and** keeps it visible in the tmux pane. Without `tee`, the log file stays empty when running outside `hpc-services.sh`.
 - **No `--reload`** — the server does NOT auto-reload on code changes. **Every code modification requires a manual restart.**
 
 **After any backend code change, always:**
@@ -49,7 +50,7 @@ curl -s -X POST http://127.0.0.1:3100/summarize/structured \
 make install
 
 # Run backend locally (send to server2 tmux session) — see "Backend Startup & Restart" above
-PYTHONPATH=src/backend .venv/bin/uvicorn app:app --app-dir src/backend --host 0.0.0.0 --port 3100
+PYTHONPATH=src/backend .venv/bin/uvicorn app:app --app-dir src/backend --host 0.0.0.0 --port 3100 2>&1 | tee logs/backend.log
 
 # Run frontend locally
 cd src/frontend && npm run dev

@@ -1708,7 +1708,17 @@ async def classify_papers() -> dict[str, Any]:
     """
     import clustering
     import naming
-    
+
+    # Pre-check: LLM endpoint must be reachable (naming step requires it)
+    endpoint_config = _get_endpoint_config()
+    try:
+        _resolve_model(endpoint_config["llm_base_url"], endpoint_config["api_key"])
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"LLM endpoint unreachable — classify aborted before clustering: {e}",
+        )
+
     # Step 1: Ensure all papers have embeddings
     # Use targeted query to avoid loading all 4096-float embedding vectors
     papers_without_embeddings = db.get_papers_missing_embeddings()
