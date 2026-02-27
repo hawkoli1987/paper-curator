@@ -357,19 +357,20 @@ async def summarize_structured(payload: StructuredSummarizeRequest) -> dict[str,
     2. For each component, query 4 aspects in parallel
     3. Return structured sections
     """
+    # Input validation first — before any network calls
+    if not payload.pdf_path and not payload.arxiv_id:
+        raise HTTPException(status_code=422, detail="Provide pdf_path or arxiv_id (for already-indexed papers)")
+
     endpoint_config = _get_endpoint_config()
     base_url = endpoint_config["llm_base_url"]
     embed_base_url = endpoint_config["embedding_base_url"]
     api_key = endpoint_config["api_key"]
-    
+
     model = _resolve_model(base_url, api_key)
     embed_model = _resolve_model(embed_base_url, api_key)
-    
+
     llm_client = _get_async_openai_client(base_url, api_key)
     embed_client = _get_async_openai_client(embed_base_url, api_key)
-
-    if not payload.pdf_path and not payload.arxiv_id:
-        raise HTTPException(status_code=422, detail="Provide pdf_path or arxiv_id (for already-indexed papers)")
 
     # Pre-index: ensure chunks are stored so all queries use fast DB-backed retrieval
     if payload.pdf_path and payload.arxiv_id:
@@ -2972,9 +2973,11 @@ def _get_effective_config() -> dict[str, Any]:
     yaml_config = _load_config_yaml()
     
     # Flatten nested config for easy access
+    # NOTE: llm_base_url and embedding_base_url live under `endpoints:` in config.yaml
+    _endpoints = yaml_config.get("endpoints", {})
     defaults = {
-        "llm_base_url": yaml_config.get("llm_base_url", "http://localhost:8001/v1"),
-        "embedding_base_url": yaml_config.get("embedding_base_url", "http://localhost:8004/v1"),
+        "llm_base_url": _endpoints.get("llm_base_url", "http://localhost:8001/v1"),
+        "embedding_base_url": _endpoints.get("embedding_base_url", "http://localhost:8004/v1"),
         "skip_existing": yaml_config.get("ingestion", {}).get("skip_existing", False),
         "branching_factor": yaml_config.get("classification", {}).get("branching_factor", 5),
         "rebuild_on_ingest": yaml_config.get("classification", {}).get("rebuild_on_ingest", True),

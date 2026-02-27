@@ -38,8 +38,8 @@ slack:
 # NOTE: You can use localhost URLs - they auto-convert to host.docker.internal in Docker
 # =============================================================================
 endpoints:
-  llm_base_url: "http://localhost:8001/v1"  # LLM requests go here (affects all LLM features)
-  embedding_base_url: "http://localhost:8004/v1"  # Embedding requests go here (affects clustering + similarity)
+  llm_base_url: "https://transmissively-conidial-fredrick.ngrok-free.dev/teacher/v1"  # Qwen3-4B via ngrok (DeepSeek-V3.2 down)
+  embedding_base_url: "https://transmissively-conidial-fredrick.ngrok-free.dev/embed/v1"  # Qwen3-VL-Embedding-8B via ngrok
   api_key: "local-key"  # Shared key for the endpoints above
 
 # =============================================================================
