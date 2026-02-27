@@ -914,6 +914,18 @@ def get_references(paper_id: int) -> list[dict[str, Any]]:
             return [dict(row) for row in cur.fetchall()]
 
 
+def get_reference_by_id(ref_id: int) -> Optional[dict[str, Any]]:
+    """Get a single reference row by its primary key."""
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM paper_references WHERE id = %s",
+                (ref_id,)
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+
 def update_reference_explanation(ref_id: int, explanation: str) -> None:
     """Update reference explanation (cache LLM result)."""
     with get_db() as conn:

@@ -40,15 +40,51 @@ class TestReferences:
             },
             timeout=120
         )
-        
+
         # Endpoint must work - no skipping on 404/503
         assert resp.status_code == 200, f"References fetch failed with status {resp.status_code}: {resp.text}"
         data = resp.json()
-        
+
         assert "references" in data or "citations" in data, f"Response missing references field: {list(data.keys())}"
         refs = data.get("references", data.get("citations", []))
         # This paper should have references
         assert isinstance(refs, list)
+
+    def test_explain_reference_cache(self, backend_available):
+        """Second call to /references/explain for the same reference_id returns from_cache=True."""
+        # First fetch references to get a valid reference_id
+        fetch_resp = requests.post(
+            f"{BACKEND_URL}/references/fetch",
+            json={"arxiv_id": "1706.03762", "title": "Attention Is All You Need"},
+            timeout=120,
+        )
+        assert fetch_resp.status_code == 200
+        refs = fetch_resp.json().get("references", fetch_resp.json().get("citations", []))
+        if not refs:
+            import pytest
+            pytest.skip("No references found for cache test")
+
+        ref_id = refs[0].get("id")
+        if not ref_id:
+            import pytest
+            pytest.skip("Reference has no id field")
+
+        payload = {
+            "reference_id": ref_id,
+            "source_paper_title": "Attention Is All You Need",
+            "cited_title": refs[0].get("title", "Unknown"),
+        }
+
+        # First call — generates explanation
+        r1 = requests.post(f"{BACKEND_URL}/references/explain", json=payload, timeout=60)
+        assert r1.status_code == 200, f"First explain call failed: {r1.text}"
+
+        # Second call — must hit cache (BUG-004 fix: get_reference_by_id used correctly)
+        r2 = requests.post(f"{BACKEND_URL}/references/explain", json=payload, timeout=30)
+        assert r2.status_code == 200, f"Second explain call failed: {r2.text}"
+        assert r2.json().get("from_cache") is True, (
+            f"Cache miss on second call — BUG-004 not fixed. Response: {r2.json()}"
+        )
 
 
 class TestSimilarPapers:

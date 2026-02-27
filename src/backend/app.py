@@ -2102,8 +2102,7 @@ async def fetch_references(payload: ReferencesRequest) -> dict[str, Any]:
 async def explain_reference(payload: ExplainReferenceRequest) -> dict[str, Any]:
     """Generate an explanation for a reference using LLM."""
     # Check cache
-    refs = db.get_references(0)  # We need to query by ref ID
-    ref = next((r for r in refs if r.get("id") == payload.reference_id), None) if refs else None
+    ref = db.get_reference_by_id(payload.reference_id) if payload.reference_id else None
     if ref and ref.get("explanation"):
         return {"explanation": ref["explanation"], "from_cache": True}
     
