@@ -188,6 +188,8 @@ async def index_paper_async(
     db.store_paper_chunks(paper_id, chunks)
 
     # Compute and persist document-level embedding (mean pooling)
+    if not embeddings:
+        return {"indexed": False, "cached": False, "chunks": 0}
     doc_embedding = np.mean(embeddings, axis=0).tolist()
     db.update_paper_embedding(paper_id, doc_embedding)
 
@@ -272,7 +274,7 @@ async def rag_answer_async(
         )
 
         # Persist to DB if paper exists
-        if paper_id:
+        if paper_id and chunk_embeddings:
             for chunk, emb in zip(text_chunks, chunk_embeddings):
                 chunk["embedding"] = emb
             db.store_paper_chunks(paper_id, text_chunks)

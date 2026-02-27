@@ -41,18 +41,22 @@ def _get_db_setting(key: str, default: Any = None, value_type: str = "string") -
 
 
 @lru_cache(maxsize=4)
-def _load_config_cached(config_mtime: float) -> dict[str, Any]:
-    config_path = pathlib.Path("config/config.yaml")
+def _load_config_cached(config_mtime: float, config_path_str: str) -> dict[str, Any]:
+    config_path = pathlib.Path(config_path_str)
     config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     return config
 
 
 def _load_config() -> dict[str, Any]:
-    config_path = pathlib.Path("config/config.yaml")
-    if not config_path.exists():
-        raise HTTPException(status_code=500, detail="Config file not found: config/config.yaml")
-    mtime = config_path.stat().st_mtime
-    return _load_config_cached(mtime)
+    candidates = [
+        pathlib.Path("config/config.yaml"),                          # repo-root CWD
+        pathlib.Path(__file__).parents[2] / "config" / "config.yaml",  # always correct
+    ]
+    for config_path in candidates:
+        if config_path.exists():
+            mtime = config_path.stat().st_mtime
+            return _load_config_cached(mtime, str(config_path))
+    raise HTTPException(status_code=500, detail="Config file not found: config/config.yaml")
 
 
 def _load_prompts() -> dict[str, Any]:
