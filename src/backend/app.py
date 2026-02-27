@@ -80,7 +80,7 @@ class SummarizeRequest(BaseModel):
 
 
 class StructuredSummarizeRequest(BaseModel):
-    pdf_path: str = Field(description="Local PDF file path")
+    pdf_path: Optional[str] = Field(default=None, description="Local PDF file path")
     arxiv_id: Optional[str] = Field(default=None, description="arXiv ID for persisting index")
 
 
@@ -367,7 +367,10 @@ async def summarize_structured(payload: StructuredSummarizeRequest) -> dict[str,
     
     llm_client = _get_async_openai_client(base_url, api_key)
     embed_client = _get_async_openai_client(embed_base_url, api_key)
-    
+
+    if not payload.pdf_path and not payload.arxiv_id:
+        raise HTTPException(status_code=422, detail="Provide pdf_path or arxiv_id (for already-indexed papers)")
+
     # Pre-index: ensure chunks are stored so all queries use fast DB-backed retrieval
     if payload.pdf_path and payload.arxiv_id:
         _paper = db.get_paper_by_arxiv_id(payload.arxiv_id)

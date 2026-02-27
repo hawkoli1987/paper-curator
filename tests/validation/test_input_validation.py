@@ -50,10 +50,20 @@ class TestPdfValidation:
 class TestSummarizeValidation:
     """Validate summarize endpoint inputs."""
 
-    def test_summarize_structured_requires_pdf(self, backend_available):
-        """POST /summarize/structured requires pdf_path."""
+    def test_summarize_structured_requires_at_least_one_field(self, backend_available):
+        """POST /summarize/structured with no fields returns 422 (neither pdf_path nor arxiv_id)."""
         resp = requests.post(f"{BACKEND_URL}/summarize/structured", json={}, timeout=10)
         assert resp.status_code == 422
+
+    def test_summarize_structured_accepts_arxiv_id_alone(self, backend_available):
+        """POST /summarize/structured with only arxiv_id is accepted (pdf_path is now optional)."""
+        resp = requests.post(
+            f"{BACKEND_URL}/summarize/structured",
+            json={"arxiv_id": "1706.03762"},
+            timeout=120,
+        )
+        # Should NOT return 422 — the model no longer requires pdf_path
+        assert resp.status_code != 422, f"Got 422: pdf_path is still required but should be optional"
 
 
 class TestEmbedValidation:
