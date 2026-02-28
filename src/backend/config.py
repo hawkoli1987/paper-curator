@@ -48,10 +48,10 @@ def _load_config_cached(config_mtime: float, config_path_str: str) -> dict[str, 
 
 
 def _load_config() -> dict[str, Any]:
-    candidates = [
-        pathlib.Path("config/config.yaml"),                          # repo-root CWD
-        pathlib.Path(__file__).parents[2] / "config" / "config.yaml",  # always correct
-    ]
+    candidates = [pathlib.Path("config/config.yaml")]
+    _file = pathlib.Path(__file__).resolve()
+    if len(_file.parents) >= 3:
+        candidates.append(_file.parents[2] / "config" / "config.yaml")
     for config_path in candidates:
         if config_path.exists():
             mtime = config_path.stat().st_mtime
@@ -142,24 +142,21 @@ def _get_endpoint_config() -> dict[str, str]:
 def _get_rag_config() -> dict[str, Any]:
     """Get RAG configuration (chunking, retrieval). DB settings override config.yaml."""
     config = _load_config()
-    # Support both 'rag' and legacy 'paperqa' section names
-    pqa = config.get("rag", config.get("paperqa", {}))
+    pqa = config.get("rag", {})
 
-    
-    # Get defaults from config.yaml
-    chunk_chars_default = int(pqa.get("chunk_chars", config.get("paperqa_chunk_chars", 5000)))
-    chunk_overlap_default = int(pqa.get("chunk_overlap", config.get("paperqa_chunk_overlap", 250)))
-    evidence_k_default = int(pqa.get("evidence_k", config.get("paperqa_evidence_k", 10)))
-    evidence_summary_length_default = str(pqa.get("evidence_summary_length", config.get("paperqa_evidence_summary_length", "about 100 words")))
-    
+    chunk_chars_default = int(pqa.get("chunk_chars", 5000))
+    chunk_overlap_default = int(pqa.get("chunk_overlap", 250))
+    evidence_k_default = int(pqa.get("evidence_k", 10))
+    evidence_summary_length_default = str(pqa.get("evidence_summary_length", "about 100 words"))
+
     return {
         "chunk_chars": _get_db_setting("chunk_chars", chunk_chars_default, "integer"),
         "chunk_overlap": _get_db_setting("chunk_overlap", chunk_overlap_default, "integer"),
-        "use_doc_details": bool(pqa.get("use_doc_details", config.get("paperqa_use_doc_details", True))),
+        "use_doc_details": bool(pqa.get("use_doc_details", True)),
         "evidence_k": _get_db_setting("evidence_k", evidence_k_default, "integer"),
         "evidence_summary_length": _get_db_setting("evidence_summary_length", evidence_summary_length_default, "string"),
-        "evidence_skip_summary": bool(pqa.get("evidence_skip_summary", config.get("paperqa_evidence_skip_summary", False))),
-        "evidence_relevance_score_cutoff": float(pqa.get("evidence_relevance_score_cutoff", config.get("paperqa_evidence_relevance_score_cutoff", 1))),
+        "evidence_skip_summary": bool(pqa.get("evidence_skip_summary", False)),
+        "evidence_relevance_score_cutoff": float(pqa.get("evidence_relevance_score_cutoff", 1)),
     }
 
 
@@ -184,17 +181,12 @@ def _get_ui_config() -> dict[str, Any]:
 
 
 def _get_classification_config() -> dict[str, Any]:
-    """Get classification configuration. DB settings override config.yaml."""
+    """Get classification/categorization configuration. DB settings override config.yaml."""
     config = _load_config()
     classification = config.get("classification", {})
-    
-    # Get defaults from config.yaml
     branching_default = int(classification.get("branching_factor", 5))
-    rebuild_default = bool(classification.get("rebuild_on_ingest", True))
-    
     return {
         "branching_factor": _get_db_setting("branching_factor", branching_default, "integer"),
-        "rebuild_on_ingest": _get_db_setting("rebuild_on_ingest", rebuild_default, "boolean"),
     }
 
 
@@ -245,5 +237,3 @@ def _get_topic_query_config() -> dict[str, Any]:
     }
 
 
-# Backward-compat alias
-_get_paperqa_config = _get_rag_config

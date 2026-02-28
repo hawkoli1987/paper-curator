@@ -208,3 +208,24 @@ CREATE TABLE IF NOT EXISTS paper_chunks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_paper_chunks_paper ON paper_chunks(paper_id);
+
+-- =============================================================================
+-- Incremental Placement Tables: dirty tracking + category centroids
+-- =============================================================================
+
+-- Dirty tree nodes: nodes that received new papers via placement since last recategorize
+CREATE TABLE IF NOT EXISTS dirty_tree_nodes (
+    node_id TEXT PRIMARY KEY,
+    added_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Category embeddings: centroid embeddings per tree node for fast placement descent
+CREATE TABLE IF NOT EXISTS category_embeddings (
+    node_id TEXT PRIMARY KEY,
+    embedding vector(4096) NOT NULL,
+    paper_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Migrate settings category from 'classification' to 'categorization'
+UPDATE settings SET category = 'categorization' WHERE category = 'classification';

@@ -47,6 +47,11 @@ from slack_helpers import (
 
 app = FastAPI(title="paper-curator-backend")
 
+# Module-level lock serialising all tree-modifying operations:
+# placement, partial recategorize, full rebuild, bootstrap.
+# Reads (GET /tree) are NOT locked.
+_tree_lock = asyncio.Lock()
+
 
 @app.on_event("shutdown")
 async def shutdown_external_clients():
@@ -105,12 +110,6 @@ class StructuredQaRequest(BaseModel):
     pdf_path: Optional[str] = Field(default=None, description="PDF path fallback if index not found")
 
 
-class ClassifyRequest(BaseModel):
-    title: str = Field(description="Paper title")
-    abstract: str = Field(description="Paper abstract or summary")
-    existing_categories: list[str] = Field(default=[], description="Existing categories in the tree")
-
-
 class SavePaperRequest(BaseModel):
     arxiv_id: str
     title: str
@@ -122,8 +121,6 @@ class SavePaperRequest(BaseModel):
     latex_path: Optional[str] = None
     pdf_url: Optional[str] = None
     published_at: Optional[str] = None
-    category: Optional[str] = None  # Deprecated: no longer used, kept for backwards compatibility
-    abbreviation: Optional[str] = None  # Short display name for tree node (deprecated: no longer used)
 
 
 class BatchIngestRequest(BaseModel):
@@ -132,15 +129,6 @@ class BatchIngestRequest(BaseModel):
     slack_token: Optional[str] = Field(default=None, description="Slack User OAuth Token (xoxp-...) - not persisted")
     skip_existing: bool = Field(default=True, description="Skip PDFs already in database")
     limit: Optional[int] = Field(default=None, description="Maximum number of papers to ingest (applied after dedup/skip-existing filtering)")
-
-
-class TreeNodeRequest(BaseModel):
-    node_id: str
-    name: str
-    node_type: str  # 'category' or 'paper'
-    parent_id: Optional[str] = None
-    paper_id: Optional[int] = None
-    position: int = 0
 
 
 class RepoSearchRequest(BaseModel):
@@ -452,6 +440,12 @@ async def embed_abstract(payload: EmbedAbstractRequest) -> dict[str, Any]:
     return {"embedding": vector, "model": model}
 
 
+@app.post("/embed_query")
+async def embed_query(payload: EmbedAbstractRequest) -> dict[str, Any]:
+    """Embed query text for similarity search (replaces /embed/abstract)."""
+    return await embed_abstract(payload)
+
+
 @app.post("/embed/fulltext")
 async def embed_fulltext(payload: EmbedFulltextRequest) -> dict[str, Any]:
     """Index full PDF: chunk, embed, store in paper_chunks table."""
@@ -482,11 +476,6 @@ async def embed_fulltext(payload: EmbedFulltextRequest) -> dict[str, Any]:
     return {"indexed": result["indexed"], "cached": result["cached"], "arxiv_id": payload.arxiv_id}
 
 
-# Keep old endpoint for backwards compatibility
-@app.post("/embed")
-async def embed(payload: EmbedAbstractRequest) -> dict[str, Any]:
-    """Embed text (backwards compatible, use /embed/abstract instead)."""
-    return await embed_abstract(payload)
 
 
 @app.post("/qa")
@@ -762,33 +751,6 @@ async def dedup_summary(payload: DedupSummaryRequest) -> dict[str, Any]:
     }
 
 
-@app.post("/classify")
-async def classify(payload: ClassifyRequest) -> dict[str, Any]:
-    """Classify a paper into a category using LLM."""
-    endpoint_config = _get_endpoint_config()
-    base_url = endpoint_config["llm_base_url"]
-    api_key = endpoint_config["api_key"]
-    model = _resolve_model(base_url, api_key)
-    client = _get_async_openai_client(base_url, api_key)
-
-    existing_str = ", ".join(payload.existing_categories) if payload.existing_categories else "None yet"
-    prompt = get_prompt(
-        "classify",
-        existing_categories=existing_str,
-        title=payload.title,
-        abstract=payload.abstract[:2000],
-    )
-
-    response = await client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=50,
-        temperature=0.1,
-    )
-    if not response.choices:
-        raise HTTPException(status_code=502, detail="LLM returned empty response (choices=[])")
-    category = response.choices[0].message.content.strip()
-    return {"category": category, "model": model}
 
 
 class AbbreviateRequest(BaseModel):
@@ -1116,52 +1078,60 @@ async def save_paper(payload: SavePaperRequest) -> dict[str, Any]:
             # Non-fatal: paper is saved, embedding can be computed later
             print(f"[save_paper] Warning: failed to index paper {paper_id}: {e}")
 
-    # Optionally trigger tree rebuild if embedding-based classification is enabled
-    classification_config = _get_classification_config()
-    rebuild_triggered = False
-    
-    if classification_config.get("rebuild_on_ingest", False):
-        paper = db.get_paper_by_id(paper_id)
-        if paper and paper.get("embedding") is not None:
-            asyncio.create_task(_rebuild_tree_async())
-            rebuild_triggered = True
-    
+    # Place paper into tree (or bootstrap if tree is empty)
+    placement_result: dict[str, Any] = {}
+    if indexed:
+        asyncio.create_task(_place_or_bootstrap_async(paper_id))
+        placement_result = {"placement_scheduled": True}
+
     return {
         "paper_id": paper_id,
         "indexed": indexed,
-        "rebuild_triggered": rebuild_triggered,
-        "message": "Paper saved. Use 'Re-classify' to add it to the tree.",
+        "message": "Paper saved and queued for tree placement.",
+        **placement_result,
     }
 
 
-async def _rebuild_tree_async() -> None:
-    """Helper function to rebuild tree asynchronously.
-    
-    Reuses the embedding-based clustering + naming pipeline.
-    """
+async def _bootstrap_tree_async() -> None:
+    """Full tree build used when the tree is empty (bootstrap on first paper ingest)."""
     import clustering
     import naming
     cluster_result = await asyncio.to_thread(clustering.build_tree_from_clusters)
     if cluster_result.get("total_papers", 0) < 2:
         print(
-            f"Tree rebuild skipped: {cluster_result.get('message', 'Not enough papers')}",
+            f"Bootstrap skipped: {cluster_result.get('message', 'Not enough papers')}",
             flush=True,
         )
         return
-
     tree_structure = {
         "name": cluster_result.get("name", "AI Papers"),
         "children": cluster_result.get("children", []),
     }
-
     await asyncio.to_thread(clustering.write_tree_to_database, tree_structure)
     naming_result = await naming.name_tree_nodes()
     print(
-        f"Tree rebuild complete: papers={cluster_result.get('total_papers', 0)}, "
+        f"Bootstrap complete: papers={cluster_result.get('total_papers', 0)}, "
         f"clusters={cluster_result.get('total_clusters', 0)}, "
         f"nodes_named={naming_result.get('nodes_named', 0)}",
         flush=True,
     )
+
+
+async def _place_or_bootstrap_async(paper_id: int) -> None:
+    """Background task: place paper in tree, or bootstrap if tree is empty.
+
+    Acquires _tree_lock so concurrent ingestions are serialised.
+    """
+    import clustering
+    async with _tree_lock:
+        tree = db.get_tree()
+        if not tree.get("children"):
+            # Tree is empty — bootstrap
+            print(f"[placement] Tree empty, bootstrapping for paper {paper_id}", flush=True)
+            await _bootstrap_tree_async()
+        else:
+            result = await asyncio.to_thread(clustering.place_paper_in_tree, paper_id)
+            print(f"[placement] {result}", flush=True)
 
 
 async def _fetch_slack_messages(client, channel_id: str) -> list[dict[str, Any]]:
@@ -1458,6 +1428,9 @@ async def batch_ingest(payload: BatchIngestRequest) -> dict[str, Any]:
                             t_summary = _time.monotonic() - t_start
                             log_progress(f"  [{arxiv_id}] ✓ Summary generated ({t_summary:.1f}s)")
                             
+                            # Schedule background tree placement
+                            asyncio.create_task(_place_or_bootstrap_async(db_paper_id))
+
                             t_total = _time.monotonic() - t_start
                             completed_count[0] += 1
                             log_progress(f"  [{arxiv_id}] ✓ Ingested ({completed_count[0]}/{len(new_ids)}) total={t_total:.1f}s")
@@ -1629,7 +1602,10 @@ async def batch_ingest(payload: BatchIngestRequest) -> dict[str, Any]:
                         
                         # Update paper with summary
                         db.update_paper_summary(db_paper_id, summary)
-                        
+
+                        # Schedule background tree placement
+                        asyncio.create_task(_place_or_bootstrap_async(db_paper_id))
+
                         return {
                             "file": pdf_file.name,
                             "status": "success",
@@ -1667,16 +1643,6 @@ async def batch_ingest(payload: BatchIngestRequest) -> dict[str, Any]:
     if payload.slack_channel:
         log_progress(f"✓ Completed: {success_count} success, {skip_count} skipped, {error_count} errors")
     
-    # Optionally trigger tree rebuild if embedding-based classification is enabled
-    rebuild_triggered = False
-    classification_config = _get_classification_config()
-    if classification_config.get("rebuild_on_ingest", False) and success_count > 0:
-        # Trigger tree rebuild in background (don't wait for it)
-        log_progress("Triggering tree rebuild...")
-        asyncio.create_task(_rebuild_tree_async())
-        rebuild_triggered = True
-        log_progress("Tree rebuild triggered (running in background)")
-    
     # Trigger background Semantic Scholar metadata fetch
     if success_count > 0:
         asyncio.create_task(_run_background_metadata_fetch())
@@ -1690,22 +1656,19 @@ async def batch_ingest(payload: BatchIngestRequest) -> dict[str, Any]:
         "errors": error_count,
         "results": results,
         "progress_log": progress_log if payload.slack_channel else [],
-        "rebuild_triggered": rebuild_triggered,
     }
 
 
-@app.post("/papers/classify")
-async def classify_papers() -> dict[str, Any]:
-    """Unified classification endpoint using embedding-based hierarchical clustering.
-    
-    This endpoint:
-    1. Computes/retrieves document embeddings for all papers (if missing)
-    2. Runs hierarchical clustering to build tree structure
-    3. Names all nodes using contrastive naming
-    
-    Returns:
-    - Tree structure with named categories
-    - Statistics about the classification
+@app.post("/papers/categorize")
+async def categorize_papers(full: bool = False) -> dict[str, Any]:
+    """Recategorize papers.
+
+    - Default (``full=false``): partial recategorize — re-clusters only dirty nodes,
+      then names the new child nodes.
+    - ``?full=true``: full rebuild — clusters all papers from scratch and names
+      all nodes. Slow (may take 30+ minutes for large libraries).
+
+    Acquires the tree lock so concurrent placements are blocked until done.
     """
     import clustering
     import naming
@@ -1717,71 +1680,74 @@ async def classify_papers() -> dict[str, Any]:
     except Exception as e:
         raise HTTPException(
             status_code=503,
-            detail=f"LLM endpoint unreachable — classify aborted before clustering: {e}",
+            detail=f"LLM endpoint unreachable — categorize aborted: {e}",
         )
 
-    # Step 1: Ensure all papers have embeddings
-    # Use targeted query to avoid loading all 4096-float embedding vectors
-    papers_without_embeddings = db.get_papers_missing_embeddings()
-    
-    # Try to extract embeddings for papers that don't have them
-    if papers_without_embeddings:
-        endpoint_config = _get_endpoint_config()
-        embed_base_url = endpoint_config["embedding_base_url"]
-        api_key = endpoint_config["api_key"]
-        try:
-            embed_model = _resolve_model(embed_base_url, api_key)
-            embed_client = _get_async_openai_client(embed_base_url, api_key)
-        except Exception:
-            embed_client = None
-            embed_model = None
-        for arxiv_id in papers_without_embeddings:
-            await rag.ensure_paper_embedding(arxiv_id, embed_client, embed_model)
-    
-    # Step 2: Build tree structure using clustering (run in thread to avoid blocking event loop)
-    cluster_result = await asyncio.to_thread(clustering.build_tree_from_clusters)
+    async with _tree_lock:
+        if full:
+            # --- Full rebuild ---
+            # Ensure all papers have embeddings
+            papers_without_embeddings = db.get_papers_missing_embeddings()
+            if papers_without_embeddings:
+                embed_base_url = endpoint_config["embedding_base_url"]
+                api_key = endpoint_config["api_key"]
+                try:
+                    embed_model = _resolve_model(embed_base_url, api_key)
+                    embed_client = _get_async_openai_client(embed_base_url, api_key)
+                except Exception:
+                    embed_client = None
+                    embed_model = None
+                for arxiv_id in papers_without_embeddings:
+                    await rag.ensure_paper_embedding(arxiv_id, embed_client, embed_model)
 
-    if cluster_result is None:
-        raise HTTPException(status_code=500, detail="Clustering failed: build_tree_from_clusters returned None")
-
-    if cluster_result["total_papers"] < 2:
-        return {
-            "message": cluster_result.get("message", "Not enough papers with embeddings"),
-            "papers_classified": cluster_result["total_papers"],
-            "clusters_created": 0,
-            "nodes_named": 0,
-        }
-    
-    # Extract tree structure (remove metadata fields)
-    tree_structure = {
-        "name": cluster_result.get("name", "AI Papers"),
-        "children": cluster_result.get("children", []),
-    }
-    
-    # Step 3: Save tree to database (run in thread to avoid blocking event loop)
-    await asyncio.to_thread(clustering.write_tree_to_database, tree_structure)
-    
-    # Step 4: Name all nodes using contrastive naming
-    naming_result = await naming.name_tree_nodes()
-    
-    return {
-        "message": "Clustering completed and tree saved",
-        "papers_classified": cluster_result["total_papers"],
-        "clusters_created": cluster_result["total_clusters"],
-        "nodes_named": naming_result.get("nodes_named", 0),
-        "levels_processed": naming_result.get("levels_processed", 0),
-        "tree": tree_structure,
-    }
-
-
-# Removed _build_tree_dict - tree is now stored in frontend format directly
-
-
-# DEPRECATED: Old rebalance endpoint - now redirects to main classify endpoint
-@app.post("/categories/rebalance")
-async def rebalance_categories() -> dict[str, Any]:
-    """Legacy endpoint - redirects to /papers/classify for full tree rebuild."""
-    return await classify_papers()
+            cluster_result = await asyncio.to_thread(clustering.build_tree_from_clusters)
+            if cluster_result is None:
+                raise HTTPException(status_code=500, detail="Clustering failed")
+            if cluster_result["total_papers"] < 2:
+                return {
+                    "message": cluster_result.get("message", "Not enough papers with embeddings"),
+                    "mode": "full",
+                    "papers_classified": cluster_result["total_papers"],
+                    "clusters_created": 0,
+                    "nodes_named": 0,
+                }
+            tree_structure = {
+                "name": cluster_result.get("name", "AI Papers"),
+                "children": cluster_result.get("children", []),
+            }
+            await asyncio.to_thread(clustering.write_tree_to_database, tree_structure)
+            # Clear all dirty flags — full rebuild makes them irrelevant
+            db.clear_dirty_tree_nodes(db.get_dirty_tree_nodes())
+            naming_result = await naming.name_tree_nodes()
+            return {
+                "message": "Full rebuild completed and tree saved",
+                "mode": "full",
+                "papers_classified": cluster_result["total_papers"],
+                "clusters_created": cluster_result["total_clusters"],
+                "nodes_named": naming_result.get("nodes_named", 0),
+            }
+        else:
+            # --- Partial recategorize ---
+            dirty_node_ids = db.get_dirty_tree_nodes()
+            if not dirty_node_ids:
+                return {
+                    "message": "No dirty nodes — tree is already up to date",
+                    "mode": "partial",
+                    "recategorized": 0,
+                    "nodes_named": 0,
+                }
+            recategorize_result = await asyncio.to_thread(
+                clustering.partial_recategorize, dirty_node_ids
+            )
+            new_child_ids = recategorize_result.get("new_child_nodes", [])
+            naming_result = await naming.name_tree_nodes(node_ids=new_child_ids if new_child_ids else None)
+            return {
+                "message": f"Partial recategorize complete: {recategorize_result['recategorized']} nodes rebuilt",
+                "mode": "partial",
+                "recategorized": recategorize_result["recategorized"],
+                "nodes": recategorize_result["nodes"],
+                "nodes_named": naming_result.get("nodes_named", 0),
+            }
 
 
 @app.get("/papers/{arxiv_id}/cached-data")
@@ -1822,29 +1788,6 @@ def get_tree() -> dict[str, Any]:
     """Get the full tree structure (already in frontend format with paper metadata)."""
     return db.get_tree()
 
-
-@app.post("/tree/node")
-def add_tree_node(payload: TreeNodeRequest) -> dict[str, str]:
-    """Add a node to the tree.
-    
-    Note: With JSONB storage, tree is typically rebuilt from scratch.
-    This endpoint is deprecated but kept for compatibility.
-    """
-    # Tree is now stored as JSONB and rebuilt from scratch
-    # Individual node additions are not supported
-    return {"status": "ok", "message": "Tree is rebuilt from scratch, not updated incrementally"}
-
-
-@app.delete("/tree/node/{node_id}")
-def delete_tree_node(node_id: str) -> dict[str, str]:
-    """Delete a node from the tree.
-    
-    Note: With JSONB storage, tree is typically rebuilt from scratch.
-    This endpoint is deprecated but kept for compatibility.
-    """
-    # Tree is now stored as JSONB and rebuilt from scratch
-    # Individual node deletions are not supported
-    return {"status": "ok", "message": "Tree is rebuilt from scratch, not updated incrementally"}
 
 
 @app.delete("/papers/{arxiv_id}")
@@ -2922,9 +2865,8 @@ SETTINGS_SCHEMA = {
     # Ingestion Settings
     "skip_existing": {"category": "ingestion", "type": "boolean", "label": "Skip Existing Papers", "readonly": False},
     
-    # Classification Settings
-    "branching_factor": {"category": "classification", "type": "integer", "label": "Branching Factor", "readonly": False},
-    "rebuild_on_ingest": {"category": "classification", "type": "boolean", "label": "Rebuild on Ingest", "readonly": False},
+    # Categorization Settings
+    "branching_factor": {"category": "categorization", "type": "integer", "label": "Branching Factor", "readonly": False},
     
     # RAG Settings
     "chunk_chars": {"category": "rag", "type": "integer", "label": "Chunk Size (chars)", "readonly": False},
@@ -2980,7 +2922,6 @@ def _get_effective_config() -> dict[str, Any]:
         "embedding_base_url": _endpoints.get("embedding_base_url", "http://localhost:8004/v1"),
         "skip_existing": yaml_config.get("ingestion", {}).get("skip_existing", False),
         "branching_factor": yaml_config.get("classification", {}).get("branching_factor", 5),
-        "rebuild_on_ingest": yaml_config.get("classification", {}).get("rebuild_on_ingest", True),
         "chunk_chars": yaml_config.get("rag", yaml_config.get("paperqa", {})).get("chunk_chars", 3000),
         "chunk_overlap": yaml_config.get("rag", yaml_config.get("paperqa", {})).get("chunk_overlap", 100),
         "evidence_k": yaml_config.get("rag", yaml_config.get("paperqa", {})).get("evidence_k", 10),

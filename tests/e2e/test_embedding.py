@@ -2,7 +2,6 @@
 
 Endpoints covered:
   POST /embed/abstract   (abstract text → vector)
-  POST /embed            (alias for /embed/abstract)
   POST /embed/fulltext   (full PDF → chunk + index)
 """
 import requests
@@ -32,19 +31,6 @@ class TestEmbedAbstract:
             "Embedding should contain numeric values"
         )
 
-    def test_embed_alias(self, backend_available, llm_available):
-        """POST /embed must behave identically to /embed/abstract."""
-        text = "Multi-head attention allows attending to information from different positions."
-        resp = requests.post(
-            f"{BACKEND_URL}/embed",
-            json={"text": text},
-            timeout=MEDIUM_TIMEOUT,
-        )
-        assert resp.status_code == 200, f"POST /embed (alias) failed: {resp.text}"
-        data = resp.json()
-        assert "embedding" in data, f"Missing 'embedding' in /embed response: {data}"
-        assert isinstance(data["embedding"], list)
-        assert len(data["embedding"]) > 0
 
     def test_embed_missing_text(self, backend_available):
         """Omitting the required 'text' field should return 422."""

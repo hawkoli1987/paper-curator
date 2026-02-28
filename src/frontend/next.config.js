@@ -23,16 +23,8 @@ const nextConfig = {
         destination: `${backendUrl}/pdf/:path*`,
       },
       {
-        source: "/api/classify",
-        destination: `${backendUrl}/classify`,
-      },
-      {
         source: "/api/abbreviate",
         destination: `${backendUrl}/abbreviate`,
-      },
-      {
-        source: "/api/embed",
-        destination: `${backendUrl}/embed`,
       },
       // Note: /api/qa is handled by custom API route with extended timeout
       {

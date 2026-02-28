@@ -480,6 +480,47 @@ class TreeBuilder:
 # Database Operations
 # =============================================================================
 
+def _compute_category_centroids(
+    tree: dict[str, Any],
+    embeddings_dict: dict[int, np.ndarray],
+) -> dict[str, tuple[np.ndarray, int]]:
+    """Recursively compute mean centroid for every category node in the tree.
+
+    Returns:
+        Mapping of node_id → (centroid_vector, paper_count).
+        Only category nodes are included (paper nodes are skipped).
+    """
+    def collect_paper_ids(node: dict[str, Any]) -> list[int]:
+        if node.get("node_type") == "paper":
+            pid = node.get("paper_id")
+            return [pid] if pid is not None else []
+        result = []
+        for child in node.get("children", []):
+            result.extend(collect_paper_ids(child))
+        return result
+
+    def walk(node: dict[str, Any], out: dict[str, tuple[np.ndarray, int]]) -> None:
+        if node.get("node_type") != "category":
+            return
+        node_id = node.get("node_id")
+        if node_id and node_id != "root":
+            paper_ids = collect_paper_ids(node)
+            valid = [embeddings_dict[pid] for pid in paper_ids if pid in embeddings_dict]
+            if valid:
+                centroid = np.mean(np.array(valid, dtype=np.float32), axis=0)
+                # Re-normalise so cosine dot product comparisons stay in [−1, 1]
+                norm = np.linalg.norm(centroid)
+                if norm > 0:
+                    centroid = centroid / norm
+                out[node_id] = (centroid, len(valid))
+        for child in node.get("children", []):
+            walk(child, out)
+
+    result: dict[str, tuple[np.ndarray, int]] = {}
+    walk(tree, result)
+    return result
+
+
 def write_tree_to_database(tree_structure: dict[str, Any], node_names: dict[str, str] | None = None) -> int:
     """Write frontend format tree structure to database as JSONB.
     
@@ -612,10 +653,278 @@ def build_tree_from_clusters() -> dict[str, Any]:
     
     total_nodes = count_nodes(tree_structure)
     
+    # Compute and persist category centroids for incremental placement
+    centroids = _compute_category_centroids(tree_structure, embeddings_dict)
+    db.clear_category_embeddings()
+    for node_id, (centroid, paper_count) in centroids.items():
+        db.upsert_category_embedding(node_id, centroid.tolist(), paper_count)
+    logger.info(f"Saved {len(centroids)} category centroids to DB")
+
     return {
         **tree_structure,
         "total_papers": len(papers_with_embeddings),
         "total_clusters": total_nodes,
+    }
+
+
+# =============================================================================
+# Incremental Placement
+# =============================================================================
+
+def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    """Cosine similarity between two L2-normalised vectors."""
+    return float(np.dot(a, b))
+
+
+def place_paper_in_tree(paper_id: int) -> dict[str, Any]:
+    """Place a newly ingested paper into the existing tree using centroid descent.
+
+    The caller (app.py) must hold ``_tree_lock`` before calling this function.
+
+    Algorithm:
+    1. Load paper embedding.
+    2. Load tree + category_embeddings centroids from DB.
+    3. Descend from root: at each level pick the child category with the
+       highest cosine similarity to the paper embedding.
+    4. Stop at the deepest category leaf reached.
+    5. Append a new paper node to that leaf's children list.
+    6. Recompute centroid for the modified leaf (running average).
+    7. Mark the leaf node as dirty.
+    8. Persist tree + centroid update to DB.
+
+    Returns a result dict with placement info.
+    """
+    # 1. Load paper embedding
+    raw_emb = db.get_paper_embedding(paper_id)
+    if raw_emb is None:
+        return {"placed": False, "reason": f"paper {paper_id} has no embedding"}
+
+    paper_emb = _convert_embedding_to_numpy(raw_emb)
+    # L2-normalise for cosine comparison
+    norm = np.linalg.norm(paper_emb)
+    if norm > 0:
+        paper_emb = paper_emb / norm
+
+    # 2. Load tree + centroids
+    tree = db.get_tree()
+    centroids = db.get_category_embeddings()  # node_id → {embedding, paper_count}
+
+    # Convert centroids to numpy
+    centroid_vecs: dict[str, np.ndarray] = {}
+    centroid_counts: dict[str, int] = {}
+    for nid, data in centroids.items():
+        raw = data["embedding"]
+        vec = _convert_embedding_to_numpy(raw)
+        n = np.linalg.norm(vec)
+        if n > 0:
+            vec = vec / n
+        centroid_vecs[nid] = vec
+        centroid_counts[nid] = data["paper_count"]
+
+    # 3–4. Descend from root to the best leaf category
+    def find_best_leaf(node: dict[str, Any]) -> dict[str, Any]:
+        """Return the deepest category node that best fits this paper."""
+        if node.get("node_type") == "paper":
+            return node
+
+        children = node.get("children", [])
+        category_children = [c for c in children if c.get("node_type") == "category"]
+
+        if not category_children:
+            # Leaf category (children are papers, or no children)
+            return node
+
+        # Find the child category with highest cosine similarity
+        best_child = None
+        best_sim = -2.0
+        for child in category_children:
+            cid = child.get("node_id")
+            if cid and cid in centroid_vecs:
+                sim = _cosine_similarity(paper_emb, centroid_vecs[cid])
+                if sim > best_sim:
+                    best_sim = sim
+                    best_child = child
+
+        if best_child is None:
+            # No centroid available for any child → stay at current node
+            return node
+
+        return find_best_leaf(best_child)
+
+    target_node = find_best_leaf(tree)
+
+    # If descent ended at root or at a paper node, default to root
+    if target_node.get("node_id") == "root" or target_node.get("node_type") == "paper":
+        target_node = tree
+
+    target_node_id = target_node.get("node_id", "root")
+
+    # 5. Append new paper node
+    new_paper_node = {
+        "name": f"paper_{paper_id}",
+        "node_id": _generate_node_id([paper_id]),
+        "node_type": "paper",
+        "paper_id": paper_id,
+    }
+    if "children" not in target_node:
+        target_node["children"] = []
+    target_node["children"].append(new_paper_node)
+
+    # 6. Update centroid (running average)
+    old_count = centroid_counts.get(target_node_id, 0)
+    if target_node_id in centroid_vecs and old_count > 0:
+        old_centroid = centroid_vecs[target_node_id]
+        new_centroid = (old_centroid * old_count + paper_emb) / (old_count + 1)
+        n = np.linalg.norm(new_centroid)
+        if n > 0:
+            new_centroid = new_centroid / n
+    else:
+        new_centroid = paper_emb
+    new_count = old_count + 1
+    db.upsert_category_embedding(target_node_id, new_centroid.tolist(), new_count)
+
+    # 7. Mark node dirty
+    db.add_dirty_tree_node(target_node_id)
+
+    # 8. Persist tree
+    db.save_tree(tree)
+
+    logger.info(f"Placed paper {paper_id} into node '{target_node_id}'")
+    return {"placed": True, "node_id": target_node_id, "paper_id": paper_id}
+
+
+# =============================================================================
+# Partial Recategorization
+# =============================================================================
+
+def _collect_paper_ids_under(node: dict[str, Any]) -> list[int]:
+    """Recursively collect all paper_ids under a tree node."""
+    if node.get("node_type") == "paper":
+        pid = node.get("paper_id")
+        return [pid] if pid is not None else []
+    result = []
+    for child in node.get("children", []):
+        result.extend(_collect_paper_ids_under(child))
+    return result
+
+
+def _find_node_and_parent(
+    tree: dict[str, Any],
+    target_id: str,
+    parent: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Find a node and its parent by node_id. Returns (node, parent) or (None, None)."""
+    node_id = tree.get("node_id")
+    if node_id == target_id:
+        return tree, parent
+    for child in tree.get("children", []):
+        found, found_parent = _find_node_and_parent(child, target_id, tree)
+        if found is not None:
+            return found, found_parent
+    return None, None
+
+
+def partial_recategorize(dirty_node_ids: list[str]) -> dict[str, Any]:
+    """Re-cluster the subtrees rooted at the given dirty nodes.
+
+    The caller (app.py) must hold ``_tree_lock`` before calling this function.
+
+    For each dirty node:
+    1. Collect all paper_ids under that node.
+    2. Re-run TreeBuilder._build_node() to produce a new sub-tree.
+    3. Apply _ensure_homogeneous_children().
+    4. Preserve the dirty node's existing node_id and name.
+    5. Splice the new sub-tree's children back under the dirty node.
+    6. Recompute centroids for all affected nodes.
+    7. Clear dirty flags for processed nodes.
+    8. Save tree.
+
+    Returns a result dict with stats.
+    """
+    if not dirty_node_ids:
+        return {"recategorized": 0, "nodes": []}
+
+    # Load full embeddings for all papers (needed for re-clustering)
+    _, embeddings_normalized, paper_ids_list = _extract_papers_with_embeddings()
+    if len(embeddings_normalized) == 0:
+        return {"recategorized": 0, "nodes": [], "message": "No papers with embeddings"}
+
+    embeddings_dict = {
+        paper_id: embeddings_normalized[idx]
+        for idx, paper_id in enumerate(paper_ids_list)
+    }
+
+    config = _get_clustering_config()
+    branching_factor = config["branching_factor"]
+    builder = TreeBuilder(embeddings_dict, branching_factor)
+
+    tree = db.get_tree()
+    processed = []
+    new_child_node_ids: list[str] = []
+
+    for dirty_id in dirty_node_ids:
+        node, parent = _find_node_and_parent(tree, dirty_id)
+        if node is None:
+            logger.warning(f"Dirty node {dirty_id} not found in tree, skipping")
+            continue
+
+        # 1. Collect paper_ids under this node
+        paper_ids = _collect_paper_ids_under(node)
+        if not paper_ids:
+            logger.info(f"Dirty node {dirty_id} has no papers, skipping")
+            continue
+
+        # 2. Re-cluster
+        valid_ids = [pid for pid in paper_ids if pid in embeddings_dict]
+        if len(valid_ids) < 2:
+            # Not enough to cluster — leave as-is, just clear dirty flag
+            processed.append(dirty_id)
+            continue
+
+        new_subtree = builder._build_node(valid_ids)
+
+        # 3. Apply homogeneous children
+        if new_subtree.get("children"):
+            new_subtree["children"] = builder._ensure_homogeneous_children(new_subtree["children"])
+
+        # 4–5. Preserve existing node_id and name; replace children
+        preserved_name = node.get("name", dirty_id)
+        node["name"] = preserved_name
+        # node["node_id"] stays as dirty_id (already in-place)
+
+        if new_subtree.get("node_type") == "category" and new_subtree.get("children"):
+            node["children"] = new_subtree["children"]
+            # Collect ids of new child category nodes for naming
+            for child in node["children"]:
+                if child.get("node_type") == "category":
+                    new_child_node_ids.append(child["node_id"])
+        else:
+            # Subtree collapsed to a leaf or paper — keep children as paper nodes
+            node["children"] = [{"name": f"paper_{pid}", "node_id": _generate_node_id([pid]),
+                                  "node_type": "paper", "paper_id": pid}
+                                 for pid in valid_ids]
+
+        processed.append(dirty_id)
+        logger.info(f"Partial recategorize: rebuilt node {dirty_id} ({len(valid_ids)} papers)")
+
+    # 6. Recompute all centroids from the updated tree
+    centroids = _compute_category_centroids(tree, embeddings_dict)
+    # Only update the affected nodes (the dirty ones and their new children)
+    affected_ids = set(processed) | set(new_child_node_ids)
+    for node_id, (centroid, paper_count) in centroids.items():
+        if node_id in affected_ids:
+            db.upsert_category_embedding(node_id, centroid.tolist(), paper_count)
+
+    # 7. Clear dirty flags for processed nodes
+    db.clear_dirty_tree_nodes(processed)
+
+    # 8. Save tree
+    db.save_tree(tree)
+
+    return {
+        "recategorized": len(processed),
+        "nodes": processed,
+        "new_child_nodes": new_child_node_ids,
     }
 
 

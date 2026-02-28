@@ -69,9 +69,9 @@ class TestSummarizeValidation:
 class TestEmbedValidation:
     """Validate embedding endpoint inputs."""
 
-    def test_embed_requires_text(self, backend_available):
-        """POST /embed requires text."""
-        resp = requests.post(f"{BACKEND_URL}/embed", json={}, timeout=10)
+    def test_embed_query_requires_text(self, backend_available):
+        """POST /embed_query requires text."""
+        resp = requests.post(f"{BACKEND_URL}/embed_query", json={}, timeout=10)
         assert resp.status_code == 422
 
     def test_embed_abstract_requires_text(self, backend_available):
@@ -102,11 +102,6 @@ class TestQAValidation:
 class TestClassifyValidation:
     """Validate classification endpoint inputs."""
 
-    def test_classify_requires_fields(self, backend_available):
-        """POST /classify requires title and abstract."""
-        resp = requests.post(f"{BACKEND_URL}/classify", json={}, timeout=10)
-        assert resp.status_code == 422
-
     def test_abbreviate_requires_title(self, backend_available):
         """POST /abbreviate requires title."""
         resp = requests.post(f"{BACKEND_URL}/abbreviate", json={}, timeout=10)
@@ -124,15 +119,6 @@ class TestPaperValidation:
     def test_reabbreviate_requires_arxiv_id(self, backend_available):
         """POST /papers/reabbreviate requires arxiv_id."""
         resp = requests.post(f"{BACKEND_URL}/papers/reabbreviate", json={}, timeout=10)
-        assert resp.status_code == 422
-
-
-class TestTreeValidation:
-    """Validate tree endpoint inputs."""
-
-    def test_tree_node_requires_fields(self, backend_available):
-        """POST /tree/node requires node_id, name, and node_type."""
-        resp = requests.post(f"{BACKEND_URL}/tree/node", json={}, timeout=10)
         assert resp.status_code == 422
 
 

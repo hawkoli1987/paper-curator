@@ -336,14 +336,15 @@ export default function Home() {
   const [pendingSlackChannel, setPendingSlackChannel] = useState("");
   const [slackToken, setSlackToken] = useState("");
   
-  // Re-categorize state (replaces old rebalance)
-  const [isReclassifying, setIsReclassifying] = useState(false);
-  const [reclassifyResult, setReclassifyResult] = useState<{
+  // Categorize state
+  const [isCategorizing, setIsCategorizing] = useState(false);
+  const [categorizeResult, setCategorizeResult] = useState<{
     message: string;
-    papers_classified: number;
-    clusters_created: number;
+    mode: string;
+    papers_classified?: number;
+    clusters_created?: number;
+    recategorized?: number;
     nodes_named: number;
-    levels_processed: number;
   } | null>(null);
   
   // Collapsible sections
@@ -626,18 +627,20 @@ export default function Home() {
     []
   );
 
-  const handleReclassifyPapers = async () => {
-    setIsReclassifying(true);
-    setReclassifyResult(null);
+  const _doCategorize = async (full: boolean) => {
+    setIsCategorizing(true);
+    setCategorizeResult(null);
     clearIngestLog();
-    logIngest("Re-categorizeing papers using embedding-based clustering...");
-    
+    const label = full ? "full rebuild" : "partial recategorize";
+    logIngest(`Starting ${label}...`);
+
     try {
-      const res = await fetch("/api/papers/classify", {
+      const url = full ? "/api/papers/categorize?full=true" : "/api/papers/categorize";
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });
-      
+
       if (!res.ok) {
         const errText = await res.text();
         logIngest(`Error: HTTP ${res.status}`);
@@ -647,17 +650,17 @@ export default function Home() {
         } catch {
           logIngest(`Details: ${errText.slice(0, 200)}`);
         }
-        setIsReclassifying(false);
         return;
       }
-      
+
       const data = await res.json();
-      setReclassifyResult(data);
+      setCategorizeResult(data);
       logIngest(`✓ ${data.message}`);
-      logIngest(`  Papers classified: ${data.papers_classified}`);
-      logIngest(`  Clusters created: ${data.clusters_created}`);
+      if (data.papers_classified !== undefined) logIngest(`  Papers classified: ${data.papers_classified}`);
+      if (data.clusters_created !== undefined) logIngest(`  Clusters created: ${data.clusters_created}`);
+      if (data.recategorized !== undefined) logIngest(`  Nodes recategorized: ${data.recategorized}`);
       logIngest(`  Nodes named: ${data.nodes_named}`);
-      
+
       // Refresh tree
       const treeRes = await fetch("/api/tree");
       if (treeRes.ok) {
@@ -668,9 +671,18 @@ export default function Home() {
     } catch (e) {
       logIngest(`Error: ${e}`);
     } finally {
-      setIsReclassifying(false);
+      setIsCategorizing(false);
       logIngest("Done");
     }
+  };
+
+  const handleCategorizePartial = () => _doCategorize(false);
+
+  const handleCategorizeFull = () => {
+    if (!window.confirm(
+      "Full rebuild re-clusters ALL papers from scratch and may take 30+ minutes.\n\nProceed?"
+    )) return;
+    _doCategorize(true);
   };
 
   // =========================================================================
@@ -2434,11 +2446,20 @@ export default function Home() {
               {(isIngesting || isBatchIngesting) ? "Processing..." : "Ingest"}
             </button>
             <button
-              onClick={handleReclassifyPapers}
-              disabled={isReclassifying}
+              onClick={handleCategorizePartial}
+              disabled={isCategorizing}
               className="px-4 py-2 bg-purple-600 text-white rounded font-medium disabled:bg-gray-400 hover:bg-purple-700 whitespace-nowrap"
+              title="Re-cluster dirty nodes (fast)"
             >
-              {isReclassifying ? "Re-categorizing..." : "Re-categorize"}
+              {isCategorizing ? "Categorizing..." : "Categorize"}
+            </button>
+            <button
+              onClick={handleCategorizeFull}
+              disabled={isCategorizing}
+              className="px-4 py-2 bg-purple-800 text-white rounded font-medium disabled:bg-gray-400 hover:bg-purple-900 whitespace-nowrap"
+              title="Full rebuild from scratch (slow, 30+ min)"
+            >
+              Full Rebuild
             </button>
             {/* Search with mode dropdown */}
             <div className="relative flex-1 flex">

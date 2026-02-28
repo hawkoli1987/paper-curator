@@ -218,9 +218,10 @@ class AsyncTreeNamer:
         max_concurrent: int = 5,
         debug: bool = False,
         paper_cache: dict[int, dict[str, Any]] | None = None,
+        node_ids_filter: list[str] | None = None,
     ):
         """Initialize namer.
-        
+
         Args:
             tree: Root node of tree structure
             llm_client: AsyncOpenAI client
@@ -228,6 +229,7 @@ class AsyncTreeNamer:
             max_concurrent: Max concurrent LLM calls
             debug: If True, save LLM calls to schemas/llm_naming.json
             paper_cache: Pre-loaded paper data (from db.get_papers_lightweight)
+            node_ids_filter: If provided, only these node_ids will be named.
         """
         self.tree = tree
         self.index = TreeIndex(tree, paper_cache=paper_cache)
@@ -235,7 +237,8 @@ class AsyncTreeNamer:
         self.model = model
         self.semaphore = asyncio.Semaphore(max_concurrent)
         self.debug = debug
-        
+        self.node_ids_filter: set[str] | None = set(node_ids_filter) if node_ids_filter is not None else None
+
         self.nodes_named = 0
         
         # Debug: store LLM calls
@@ -301,6 +304,7 @@ class AsyncTreeNamer:
                 node_id
                 for node_id in self.index.nodes_at_depth.get(depth, [])
                 if self.index.node_ref.get(node_id, {}).get("node_type") == "category"
+                and (self.node_ids_filter is None or node_id in self.node_ids_filter)
             ]
             if not level_nodes:
                 continue
@@ -508,19 +512,24 @@ class AsyncTreeNamer:
 # Main Entry Point
 # =============================================================================
 
-async def name_tree_nodes(debug: bool = False) -> dict[str, Any]:
-    """Name all tree nodes using async post-order contrastive naming.
-    
+async def name_tree_nodes(debug: bool = False, node_ids: list[str] | None = None) -> dict[str, Any]:
+    """Name tree nodes using async post-order contrastive naming.
+
+    When ``node_ids`` is provided only those specific category nodes are named
+    (used by partial recategorize to name only newly created child nodes).
+    When ``node_ids`` is None (default) all category nodes are named.
+
     Process:
     1. Load tree and build one-time index
     2. Initialize paper abbreviations
     3. Launch category naming tasks depth by depth
     4. Each task calls LLM with contrastive context
     5. Update names in tree and database
-    
+
     Args:
         debug: If True, save LLM calls to schemas/llm_naming.json
-    
+        node_ids: Optional list of node_ids to name. If None, names all.
+
     Returns:
         Dictionary with results
     """
@@ -555,6 +564,7 @@ async def name_tree_nodes(debug: bool = False) -> dict[str, Any]:
         max_concurrent=5,
         debug=debug,
         paper_cache=paper_cache,
+        node_ids_filter=node_ids,
     )
     
     result = await namer.name_all_categories()

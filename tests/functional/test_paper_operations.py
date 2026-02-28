@@ -206,25 +206,6 @@ class TestAbbreviate:
         assert "abbreviation" in data
 
 
-class TestClassify:
-    """Test paper classification."""
-
-    def test_classify(self, backend_available):
-        """Classify paper into category."""
-        resp = requests.post(
-            f"{BACKEND_URL}/classify",
-            json={
-                "title": "Attention Is All You Need",
-                "abstract": "We propose a network architecture, the Transformer.",
-                "existing_categories": ["Computer Vision", "NLP", "RL"]
-            },
-            timeout=60
-        )
-        
-        assert resp.status_code == 200, f"Classify failed: {resp.text}"
-        data = resp.json()
-        assert "category" in data
-
 
 class TestQA:
     """Test Q&A functionality."""
@@ -297,9 +278,8 @@ class TestReabbreviate:
 class TestConfigEffects:
     """Verify configuration values have the intended effect."""
 
-    def test_rebuild_on_ingest_false(self, backend_available, test_storage_dir):
-        """With default config (rebuild_on_ingest=false), saving a paper
-        should not trigger a tree rebuild."""
+    def test_placement_scheduled_on_save(self, backend_available, test_storage_dir):
+        """Saving a paper should schedule incremental tree placement (not a full rebuild)."""
         arxiv_id = "1706.03762"
         pdf_path = f"{test_storage_dir}/downloads/local/{arxiv_id}.pdf"
         assert Path(pdf_path).exists(), f"PDF not found at {pdf_path}"
@@ -328,8 +308,11 @@ class TestConfigEffects:
         assert save_resp.status_code in (200, 409), f"Save failed: {save_resp.text}"
         if save_resp.status_code == 200:
             data = save_resp.json()
-            assert data.get("rebuild_triggered") is False, (
-                "rebuild_triggered should be False when rebuild_on_ingest is disabled"
+            # Papers are now placed incrementally via _place_or_bootstrap_async, not full rebuild
+            assert "paper_id" in data, f"Expected paper_id in save response: {data}"
+            assert "indexed" in data, f"Expected indexed in save response: {data}"
+            assert data.get("placement_scheduled") is True, (
+                f"Expected placement_scheduled=True in save response: {data}"
             )
 
 

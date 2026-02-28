@@ -272,7 +272,7 @@ def update_paper_abbreviation(paper_id: int, abbreviation: str) -> None:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE papers SET abbreviation = %s WHERE id = %s",
-                (abbreviation, paper_id)
+                (abbreviation[:50], paper_id)
             )
             conn.commit()
 
@@ -1406,3 +1406,85 @@ def clear_all_settings() -> int:
             deleted = cur.rowcount
         conn.commit()
         return deleted
+
+
+# =============================================================================
+# Incremental Placement: dirty tracking + category centroids
+# =============================================================================
+
+def get_paper_embedding(paper_id: int):
+    """Return the raw pgvector embedding for a paper, or None if not set."""
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT embedding FROM papers WHERE id = %s", (paper_id,))
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return row["embedding"]
+
+
+def get_dirty_tree_nodes() -> list[str]:
+    """Return all node_ids that have been marked dirty."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT node_id FROM dirty_tree_nodes ORDER BY added_at")
+            return [row[0] for row in cur.fetchall()]
+
+
+def add_dirty_tree_node(node_id: str) -> None:
+    """Mark a tree node as dirty (idempotent)."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO dirty_tree_nodes (node_id) VALUES (%s) ON CONFLICT DO NOTHING",
+                (node_id,),
+            )
+        conn.commit()
+
+
+def clear_dirty_tree_nodes(node_ids: list[str]) -> None:
+    """Remove specific node_ids from the dirty set."""
+    if not node_ids:
+        return
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM dirty_tree_nodes WHERE node_id = ANY(%s)",
+                (node_ids,),
+            )
+        conn.commit()
+
+
+def get_category_embeddings() -> dict[str, dict]:
+    """Return all category embeddings as {node_id: {embedding, paper_count}}."""
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT node_id, embedding, paper_count FROM category_embeddings")
+            rows = cur.fetchall()
+    return {row["node_id"]: {"embedding": row["embedding"], "paper_count": row["paper_count"]} for row in rows}
+
+
+def upsert_category_embedding(node_id: str, embedding, paper_count: int) -> None:
+    """Insert or update the centroid embedding for a category node."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO category_embeddings (node_id, embedding, paper_count, updated_at)
+                VALUES (%s, %s, %s, NOW())
+                ON CONFLICT (node_id) DO UPDATE
+                    SET embedding = EXCLUDED.embedding,
+                        paper_count = EXCLUDED.paper_count,
+                        updated_at = NOW()
+                """,
+                (node_id, embedding, paper_count),
+            )
+        conn.commit()
+
+
+def clear_category_embeddings() -> None:
+    """Delete all category embeddings (called before full rebuild)."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM category_embeddings")
+        conn.commit()
