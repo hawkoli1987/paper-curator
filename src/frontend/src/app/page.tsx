@@ -584,48 +584,6 @@ export default function Home() {
   };
 
   // Get existing categories from the tree
-  const existingCategories = useMemo(() => {
-    return taxonomy.children?.map((c) => c.name) || [];
-  }, [taxonomy]);
-
-  const addPaperToTree = useCallback(
-    (paper: {
-      arxivId: string;
-      title: string;
-      authors: string[];
-      summary: string;
-      pdfPath?: string;
-      category: string;
-      abbreviation?: string;
-    }) => {
-      setTaxonomy((prev) => {
-        const newTree = JSON.parse(JSON.stringify(prev)) as PaperNode;
-        let categoryNode = newTree.children?.find((c) => c.name === paper.category);
-        if (!categoryNode) {
-          categoryNode = { name: paper.category, children: [], node_type: "category" };
-          newTree.children = newTree.children || [];
-          newTree.children.push(categoryNode);
-        }
-        categoryNode.children = categoryNode.children || [];
-        // Use abbreviation if provided, otherwise truncate title
-        const displayName = paper.abbreviation || (paper.title.length > 20 ? paper.title.slice(0, 18) + ".." : paper.title);
-        categoryNode.children.push({
-          name: displayName,
-          node_type: "paper",
-          attributes: {
-            arxivId: paper.arxivId,
-            title: paper.title,
-            authors: paper.authors,
-            summary: paper.summary,
-            pdfPath: paper.pdfPath,
-            category: paper.category,
-          },
-        });
-        return newTree;
-      });
-    },
-    []
-  );
 
   const _doCategorize = async (full: boolean) => {
     setIsCategorizing(true);
@@ -1082,7 +1040,6 @@ export default function Home() {
         { name: "Resolve arXiv", status: "pending" },
         { name: "Download PDF", status: "pending" },
         { name: "Extract text", status: "pending" },
-        { name: "Classify (LLM)", status: "pending" },
         { name: "Abbreviate (LLM)", status: "pending" },
         { name: "Summarize (LLM)", status: "pending" },
         { name: "Save", status: "pending" },
@@ -1096,7 +1053,6 @@ export default function Home() {
       let latexPath = "";
       let pdfUrl = "";
       let published = "";
-      let category = "";
       let abbreviation = "";
       let summary = "";
 
@@ -1139,7 +1095,7 @@ export default function Home() {
       logIngest(`Skipping ingestion - paper ${arxivId} was previously ingested.`);
       updateStep(0, { status: "done", message: `${title} (already exists)` });
       // Mark remaining steps as skipped
-      for (let i = 1; i < 7; i++) {
+      for (let i = 1; i < 6; i++) {
         updateStep(i, { status: "done", message: "Skipped (duplicate)" });
       }
       // Refresh tree to ensure search/index is up to date
@@ -1176,27 +1132,17 @@ export default function Home() {
     logIngest(`PDF saved to: ${pdfPath}`);
     updateStep(1, { status: "done", message: "PDF downloaded" });
 
-    // Steps 3-5: Extract + Classify + Abbreviate in PARALLEL
-    // These are independent: extract uses PDF, classify/abbreviate use title/abstract
-    logIngest("Running Extract + Classify + Abbreviate in parallel...");
+    // Steps 3-4: Extract + Abbreviate in PARALLEL
+    // These are independent: extract uses PDF, abbreviate uses title
+    logIngest("Running Extract + Abbreviate in parallel...");
     updateStep(2, { status: "running" });
-    updateStep(3, { status: "running", message: "Determining category..." });
-    updateStep(4, { status: "running", message: "Creating short name..." });
+    updateStep(3, { status: "running", message: "Creating short name..." });
 
-    const [extractRes, classifyRes, abbreviateRes] = await Promise.all([
+    const [extractRes, abbreviateRes] = await Promise.all([
       fetch("/api/pdf/extract", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pdf_path: pdfPath }),
-      }),
-      fetch("/api/classify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title,
-          abstract,
-          existing_categories: existingCategories,
-        }),
       }),
       fetch("/api/abbreviate", {
         method: "POST",
@@ -1213,30 +1159,20 @@ export default function Home() {
     }
     updateStep(2, { status: "done", message: "Text extracted" });
 
-    // Handle Classify result
-    if (!classifyRes.ok) {
-      updateStep(3, { status: "error", message: `HTTP ${classifyRes.status}` });
-      setIsIngesting(false);
-      return;
-    }
-    const classifyData = await classifyRes.json();
-    category = classifyData.category;
-    updateStep(3, { status: "done", message: category });
-
     // Handle Abbreviate result
     if (abbreviateRes.ok) {
       const abbreviateData = await abbreviateRes.json();
       abbreviation = abbreviateData.abbreviation;
-      updateStep(4, { status: "done", message: abbreviation });
+      updateStep(3, { status: "done", message: abbreviation });
     } else {
       // Fallback to truncated title
       abbreviation = title.length > 20 ? title.slice(0, 18) + ".." : title;
-      updateStep(4, { status: "done", message: abbreviation });
+      updateStep(3, { status: "done", message: abbreviation });
     }
 
-    // Step 6: Summarize (quick single query, also indexes PDF for QA)
+    // Step 5: Summarize (quick single query, also indexes PDF for QA)
     logIngest("Summarizing paper (may take ~30s)...");
-    updateStep(5, { status: "running", message: "May take a minute..." });
+    updateStep(4, { status: "running", message: "May take a minute..." });
     const summarizeRes = await fetch("/api/summarize", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1251,17 +1187,17 @@ export default function Home() {
       } catch {
         logIngest(`Details: ${errText.slice(0, 200)}`);
       }
-      updateStep(5, { status: "error", message: `HTTP ${summarizeRes.status}` });
+      updateStep(4, { status: "error", message: `HTTP ${summarizeRes.status}` });
       setIsIngesting(false);
       return;
     }
     const summarizeData = await summarizeRes.json();
     summary = summarizeData.summary;
     logIngest("Summary generated successfully");
-    updateStep(5, { status: "done", message: "Done" });
+    updateStep(4, { status: "done", message: "Done" });
 
-    // Step 7: Save to database
-    updateStep(6, { status: "running" });
+    // Step 6: Save to database
+    updateStep(5, { status: "running" });
     const saveRes = await fetch("/api/papers/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1275,26 +1211,24 @@ export default function Home() {
         latex_path: latexPath,
         pdf_url: pdfUrl,
         published_at: published,
-        category,
         abbreviation,
       }),
     });
     if (!saveRes.ok) {
-      updateStep(6, { status: "error", message: `HTTP ${saveRes.status}` });
+      updateStep(5, { status: "error", message: `HTTP ${saveRes.status}` });
     } else {
-      updateStep(6, { status: "done", message: "Saved" });
+      updateStep(5, { status: "done", message: "Saved" });
     }
 
-    // Add to tree
-    addPaperToTree({
-      arxivId,
-      title,
-      authors,
-      summary,
-      pdfPath,
-      category,
-      abbreviation,
-    });
+    // Refresh tree after a short delay — gives place_paper_in_tree time to complete
+    setTimeout(async () => {
+      const treeRes = await fetch("/api/tree");
+      if (treeRes.ok) {
+        const treeData = await treeRes.json();
+        setTaxonomy(treeData);
+        logIngest("Tree refreshed — paper placed in category");
+      }
+    }, 1500);
 
     // Prefetch auxiliary data in background (don't wait)
     fetch("/api/papers/prefetch", {
