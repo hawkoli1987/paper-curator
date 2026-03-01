@@ -211,6 +211,18 @@ def _resolve_model(base_url: str, api_key: str) -> str:
     return resolve_model(base_url, api_key)
 
 
+def _get_llm_url(endpoint_config: dict) -> str:
+    """Return LLM base URL; fall back to SLM if DeepSeek is unreachable."""
+    llm_url = endpoint_config["llm_base_url"]
+    try:
+        _resolve_model(llm_url, endpoint_config["api_key"])
+        return llm_url
+    except Exception:
+        slm_url = endpoint_config["slm_base_url"]
+        _resolve_model(slm_url, endpoint_config["api_key"])  # propagate if SLM also down
+        return slm_url
+
+
 async def _download_arxiv_pdf(arxiv_id: str, pdf_url: str) -> str:
     """Download arXiv PDF and return local path with retry logic."""
     return await download_arxiv_pdf_async(arxiv_id)
@@ -298,7 +310,7 @@ async def summarize(payload: SummarizeRequest) -> dict[str, Any]:
     """Summarize a paper using custom RAG."""
     prompt_id, prompt_hash, prompt_body = _load_prompt()
     endpoint_config = _get_endpoint_config()
-    base_url = endpoint_config["llm_base_url"]
+    base_url = _get_llm_url(endpoint_config)
     embed_base_url = endpoint_config["embedding_base_url"]
     api_key = endpoint_config["api_key"]
     
@@ -350,7 +362,7 @@ async def summarize_structured(payload: StructuredSummarizeRequest) -> dict[str,
         raise HTTPException(status_code=422, detail="Provide pdf_path or arxiv_id (for already-indexed papers)")
 
     endpoint_config = _get_endpoint_config()
-    base_url = endpoint_config["llm_base_url"]
+    base_url = _get_llm_url(endpoint_config)
     embed_base_url = endpoint_config["embedding_base_url"]
     api_key = endpoint_config["api_key"]
 
@@ -485,7 +497,7 @@ async def qa(payload: QaRequest) -> dict[str, Any]:
     Persists the query and answer to the database for later retrieval.
     """
     endpoint_config = _get_endpoint_config()
-    base_url = endpoint_config["llm_base_url"]
+    base_url = _get_llm_url(endpoint_config)
     embed_base_url = endpoint_config["embedding_base_url"]
     api_key = endpoint_config["api_key"]
     model = _resolve_model(base_url, api_key)
@@ -540,7 +552,7 @@ async def qa_structured(payload: StructuredQaRequest) -> dict[str, Any]:
         )
     
     endpoint_config = _get_endpoint_config()
-    base_url = endpoint_config["llm_base_url"]
+    base_url = _get_llm_url(endpoint_config)
     embed_base_url = endpoint_config["embedding_base_url"]
     api_key = endpoint_config["api_key"]
     model = _resolve_model(base_url, api_key)
@@ -638,7 +650,7 @@ async def qa_structured(payload: StructuredQaRequest) -> dict[str, Any]:
 
 class MergeSummaryRequest(BaseModel):
     arxiv_id: str = Field(description="arXiv ID of the paper")
-    selected_qa: list[dict[str, str]] = Field(description="List of {question, answer} pairs to merge")
+    selected_qa: Optional[list[dict[str, str]]] = Field(default=None, description="List of {question, answer} pairs to merge")
 
 
 class DedupSummaryRequest(BaseModel):
@@ -672,7 +684,7 @@ async def merge_qa_to_summary(payload: MergeSummaryRequest) -> dict[str, Any]:
     
     # Get LLM config
     endpoint_config = _get_endpoint_config()
-    base_url = endpoint_config["llm_base_url"]
+    base_url = _get_llm_url(endpoint_config)
     api_key = endpoint_config["api_key"]
     model = _resolve_model(base_url, api_key)
     client = _get_async_openai_client(base_url, api_key)
@@ -689,10 +701,11 @@ async def merge_qa_to_summary(payload: MergeSummaryRequest) -> dict[str, Any]:
         messages=[{"role": "user", "content": prompt}],
         max_tokens=4000,
         temperature=0.3,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
     if not response.choices:
         raise HTTPException(status_code=502, detail="LLM returned empty response (choices=[])")
-    updated_summary = response.choices[0].message.content.strip()
+    updated_summary = (response.choices[0].message.content or "").strip()
 
     # Update summary in database
     db.update_paper_summary(paper["id"], updated_summary)
@@ -722,7 +735,7 @@ async def dedup_summary(payload: DedupSummaryRequest) -> dict[str, Any]:
     
     # Get LLM config
     endpoint_config = _get_endpoint_config()
-    base_url = endpoint_config["llm_base_url"]
+    base_url = _get_llm_url(endpoint_config)
     api_key = endpoint_config["api_key"]
     model = _resolve_model(base_url, api_key)
     client = _get_async_openai_client(base_url, api_key)
@@ -735,10 +748,11 @@ async def dedup_summary(payload: DedupSummaryRequest) -> dict[str, Any]:
         messages=[{"role": "user", "content": prompt}],
         max_tokens=4000,
         temperature=0.1,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
     if not response.choices:
         raise HTTPException(status_code=502, detail="LLM returned empty response (choices=[])")
-    deduped_summary = response.choices[0].message.content.strip()
+    deduped_summary = (response.choices[0].message.content or "").strip()
 
     # Update summary in database
     db.update_paper_summary(paper["id"], deduped_summary)
@@ -761,7 +775,7 @@ class AbbreviateRequest(BaseModel):
 async def abbreviate(payload: AbbreviateRequest) -> dict[str, Any]:
     """Generate a short abbreviation for a paper title."""
     endpoint_config = _get_endpoint_config()
-    base_url = endpoint_config["llm_base_url"]
+    base_url = _get_llm_url(endpoint_config)
     api_key = endpoint_config["api_key"]
     model = _resolve_model(base_url, api_key)
     client = _get_async_openai_client(base_url, api_key)
@@ -773,12 +787,11 @@ async def abbreviate(payload: AbbreviateRequest) -> dict[str, Any]:
         messages=[{"role": "user", "content": prompt}],
         max_tokens=20,
         temperature=0.1,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
     if not response.choices:
         raise HTTPException(status_code=502, detail="LLM returned empty response (choices=[])")
-    abbrev = response.choices[0].message.content.strip()
-    # Clean up any quotes or extra formatting
-    abbrev = abbrev.strip('"\'').strip()
+    abbrev = (response.choices[0].message.content or "").strip().strip('"\'').strip()
     return {"abbreviation": abbrev, "model": model}
 
 
@@ -805,7 +818,7 @@ async def reabbreviate_paper(payload: ReabbreviateRequest) -> dict[str, Any]:
     else:
         # Generate new abbreviation using LLM
         endpoint_config = _get_endpoint_config()
-        base_url = endpoint_config["llm_base_url"]
+        base_url = _get_llm_url(endpoint_config)
         api_key = endpoint_config["api_key"]
         model = _resolve_model(base_url, api_key)
         client = _get_async_openai_client(base_url, api_key)
@@ -817,11 +830,12 @@ async def reabbreviate_paper(payload: ReabbreviateRequest) -> dict[str, Any]:
             messages=[{"role": "user", "content": prompt}],
             max_tokens=20,
             temperature=0.7,  # Higher temperature for variety on re-runs
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         )
         if not response.choices:
             raise HTTPException(status_code=502, detail="LLM returned empty response (choices=[])")
-        abbrev = response.choices[0].message.content.strip().strip('"\'').strip()
-    
+        abbrev = (response.choices[0].message.content or "").strip().strip('"\'').strip()
+
     # Store abbreviation in papers table
     db.update_paper_abbreviation(paper["id"], abbrev)
     
@@ -842,7 +856,7 @@ async def reabbreviate_all_papers() -> dict[str, Any]:
         return {"updated": 0, "results": []}
     
     endpoint_config = _get_endpoint_config()
-    base_url = endpoint_config["llm_base_url"]
+    base_url = _get_llm_url(endpoint_config)
     api_key = endpoint_config["api_key"]
     model = _resolve_model(base_url, api_key)
     client = _get_async_openai_client(base_url, api_key)
@@ -857,10 +871,11 @@ async def reabbreviate_all_papers() -> dict[str, Any]:
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=20,
                 temperature=0.1,
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             )
             if not response.choices:
                 raise HTTPException(status_code=502, detail="LLM returned empty response (choices=[])")
-            abbrev = response.choices[0].message.content.strip().strip('"\'').strip()
+            abbrev = (response.choices[0].message.content or "").strip().strip('"\'').strip()
             # Store abbreviation in papers table
             db.update_paper_abbreviation(paper["id"], abbrev)
             # Update tree node name
@@ -1165,7 +1180,7 @@ async def batch_ingest(payload: BatchIngestRequest) -> dict[str, Any]:
     
     results = []
     endpoint_config = _get_endpoint_config()
-    base_url = endpoint_config["llm_base_url"]
+    base_url = _get_llm_url(endpoint_config)
     embed_base_url = endpoint_config["embedding_base_url"]
     api_key = endpoint_config["api_key"]
     
@@ -1394,6 +1409,7 @@ async def batch_ingest(payload: BatchIngestRequest) -> dict[str, Any]:
                                 messages=[{"role": "user", "content": abbrev_prompt}],
                                 max_tokens=20,
                                 temperature=0.1,
+                                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
                             )
                             if not abbrev_resp.choices:
                                 raise RuntimeError(f"LLM returned empty response for abbreviation of {arxiv_id}")
@@ -1572,6 +1588,7 @@ async def batch_ingest(payload: BatchIngestRequest) -> dict[str, Any]:
                             messages=[{"role": "user", "content": abbrev_prompt}],
                             max_tokens=20,
                             temperature=0.1,
+                            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
                         )
                         if not abbrev_resp.choices:
                             raise RuntimeError(f"LLM returned empty response for abbreviation of {paper_id}")
@@ -1673,10 +1690,10 @@ async def categorize_papers(full: bool = False) -> dict[str, Any]:
     import clustering
     import naming
 
-    # Pre-check: LLM endpoint must be reachable (naming step requires it)
+    # Pre-check: LLM or SLM endpoint must be reachable (naming step requires SLM)
     endpoint_config = _get_endpoint_config()
     try:
-        _resolve_model(endpoint_config["llm_base_url"], endpoint_config["api_key"])
+        _get_llm_url(endpoint_config)
     except Exception as e:
         raise HTTPException(
             status_code=503,
@@ -1819,20 +1836,26 @@ def delete_paper(arxiv_id: str) -> dict[str, Any]:
 
 class PrefetchRequest(BaseModel):
     arxiv_id: str
-    title: str
+    title: Optional[str] = None
 
 
 @app.post("/papers/prefetch")
 async def prefetch_paper_data(payload: PrefetchRequest) -> dict[str, Any]:
     """Prefetch repos, references, and similar papers in parallel.
-    
+
     Call this after paper ingest to cache auxiliary data for faster UI loading.
     """
+    title = payload.title
+    if not title:
+        paper = db.get_paper_by_arxiv_id(payload.arxiv_id)
+        if paper:
+            title = paper["title"]
+        # If still None: proceed — _prefetch_repos will return [] gracefully
     apis_config = _get_external_apis_config()
     api_key = apis_config.get("semantic_scholar_api_key")
-    
+
     # Run all three fetches in parallel
-    repos_task = _prefetch_repos(payload.arxiv_id, payload.title, apis_config)
+    repos_task = _prefetch_repos(payload.arxiv_id, title, apis_config)
     refs_task = _get_semantic_scholar_references(payload.arxiv_id, api_key)
     similar_task = _get_semantic_scholar_recommendations(payload.arxiv_id, 10, api_key)
     
@@ -1851,8 +1874,10 @@ async def prefetch_paper_data(payload: PrefetchRequest) -> dict[str, Any]:
     }
 
 
-async def _prefetch_repos(arxiv_id: str, title: str, apis_config: dict) -> list[dict]:
+async def _prefetch_repos(arxiv_id: str, title: Optional[str], apis_config: dict) -> list[dict]:
     """Helper to prefetch repos for prefetch endpoint."""
+    if not title:
+        return []
     paper = db.get_paper_by_arxiv_id(arxiv_id)
     if paper:
         cached = db.get_cached_repos(paper["id"])
@@ -2089,7 +2114,7 @@ async def explain_reference(payload: ExplainReferenceRequest) -> dict[str, Any]:
         return {"explanation": ref["explanation"], "from_cache": True}
     
     endpoint_config = _get_endpoint_config()
-    base_url = endpoint_config["llm_base_url"]
+    base_url = _get_llm_url(endpoint_config)
     api_key = endpoint_config["api_key"]
     model = _resolve_model(base_url, api_key)
     client = _get_async_openai_client(base_url, api_key)
@@ -2110,10 +2135,11 @@ async def explain_reference(payload: ExplainReferenceRequest) -> dict[str, Any]:
         messages=[{"role": "user", "content": prompt}],
         max_tokens=200,
         temperature=0.3,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
     if not response.choices:
         raise HTTPException(status_code=502, detail="LLM returned empty response (choices=[])")
-    explanation = response.choices[0].message.content.strip()
+    explanation = (response.choices[0].message.content or "").strip()
 
     # Cache the explanation
     if payload.reference_id:
@@ -2364,7 +2390,7 @@ async def topic_query(topic_id: int, payload: TopicQueryRequest) -> dict[str, An
     
     # Get LLM config
     endpoint_config = _get_endpoint_config()
-    base_url = endpoint_config["llm_base_url"]
+    base_url = _get_llm_url(endpoint_config)
     api_key = endpoint_config["api_key"]
     raw_model = resolve_model(base_url, api_key)
     llm_client = _get_async_openai_client(base_url, api_key)
@@ -2576,11 +2602,12 @@ Please synthesize these responses into a coherent, comprehensive answer.
         messages=[{"role": "user", "content": aggregation_prompt}],
         max_tokens=2000,
         temperature=0.3,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
     if not response.choices:
         raise HTTPException(status_code=502, detail="LLM returned empty response (choices=[])")
-    final_answer = response.choices[0].message.content.strip()
-    
+    final_answer = (response.choices[0].message.content or "").strip()
+
     # Save to database
     db.add_topic_query(
         topic_id=topic_id,
@@ -2859,6 +2886,7 @@ async def _run_background_metadata_fetch() -> None:
 SETTINGS_SCHEMA = {
     # LLM Settings
     "llm_base_url": {"category": "llm", "type": "string", "label": "LLM Base URL", "readonly": False},
+    "slm_base_url": {"category": "llm", "type": "string", "label": "SLM Base URL (naming + fallback)", "readonly": False},
     "embedding_base_url": {"category": "llm", "type": "string", "label": "Embedding Base URL", "readonly": False},
     # api_key is intentionally excluded (not shown in GUI per user requirement)
     
@@ -2919,6 +2947,7 @@ def _get_effective_config() -> dict[str, Any]:
     _endpoints = yaml_config.get("endpoints", {})
     defaults = {
         "llm_base_url": _endpoints.get("llm_base_url", "http://localhost:8001/v1"),
+        "slm_base_url": _endpoints.get("slm_base_url", _endpoints.get("llm_base_url", "http://localhost:8001/v1")),
         "embedding_base_url": _endpoints.get("embedding_base_url", "http://localhost:8004/v1"),
         "skip_existing": yaml_config.get("ingestion", {}).get("skip_existing", False),
         "branching_factor": yaml_config.get("classification", {}).get("branching_factor", 5),

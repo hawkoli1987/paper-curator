@@ -126,14 +126,17 @@ def _get_endpoint_config() -> dict[str, str]:
     
     # Get defaults from config.yaml
     llm_url_default = endpoints.get("llm_base_url", config.get("openai_api_base", ""))
+    slm_url_default = endpoints.get("slm_base_url", llm_url_default)  # fallback: same as LLM if not set
     embed_url_default = endpoints.get("embedding_base_url", config.get("openai_api_base3", ""))
-    
+
     # Check DB overrides
     llm_url = _get_db_setting("llm_base_url", llm_url_default, "string")
+    slm_url = _get_db_setting("slm_base_url", slm_url_default, "string")
     embed_url = _get_db_setting("embedding_base_url", embed_url_default, "string")
-    
+
     return {
         "llm_base_url": _convert_localhost_for_docker(llm_url),
+        "slm_base_url": _convert_localhost_for_docker(slm_url),
         "embedding_base_url": _convert_localhost_for_docker(embed_url),
         "api_key": endpoints.get("api_key", config.get("openai_api_key", "local-key")),
     }

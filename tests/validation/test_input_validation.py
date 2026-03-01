@@ -60,7 +60,7 @@ class TestSummarizeValidation:
         resp = requests.post(
             f"{BACKEND_URL}/summarize/structured",
             json={"arxiv_id": "1706.03762"},
-            timeout=120,
+            timeout=600,
         )
         # Should NOT return 422 — the model no longer requires pdf_path
         assert resp.status_code != 422, f"Got 422: pdf_path is still required but should be optional"

@@ -53,7 +53,9 @@ def _get_prompt(prompt_name: str, **kwargs: Any) -> str:
     from pathlib import Path
     
     prompt_paths = [
+        Path(__file__).parent / "prompts" / "prompts.json",  # relative to naming.py (always works)
         Path("prompts/prompts.json"),
+        Path("src/backend/prompts/prompts.json"),
         Path("../prompts/prompts.json"),
         Path("../../prompts/prompts.json"),
     ]
@@ -445,11 +447,12 @@ class AsyncTreeNamer:
                     messages=[{"role": "user", "content": prompt}],
                     max_tokens=50,
                     temperature=0.7,  # Higher temperature for variety on re-naming
+                    extra_body={"chat_template_kwargs": {"enable_thinking": False}},
                 )
                 if not response.choices:
                     raise RuntimeError(f"LLM returned empty response for node {node_id}")
-                response_text = response.choices[0].message.content
-                raw_name = response_text.strip().strip('"\'')
+                response_text = (response.choices[0].message.content or "").strip()
+                raw_name = response_text.strip('"\'')
                 new_name = self._sanitize_name(raw_name)
                 
                 # Debug: log LLM call
@@ -543,12 +546,12 @@ async def name_tree_nodes(debug: bool = False, node_ids: list[str] | None = None
     
     # Get LLM config
     endpoint_config = _get_endpoint_config()
-    base_url = endpoint_config["llm_base_url"]
+    base_url = endpoint_config["slm_base_url"]
     api_key = endpoint_config["api_key"]
     model = _resolve_model(base_url, api_key)
     client = _get_async_openai_client(base_url, api_key)
-    
-    print(f"Starting async tree naming with model: {model}")
+
+    print(f"Starting async tree naming with model: {model} (SLM: {base_url})")
     if debug:
         print("Debug mode: LLM calls will be saved to schemas/llm_naming.json")
     
@@ -738,10 +741,11 @@ async def rename_single_category(
         messages=[{"role": "user", "content": prompt}],
         max_tokens=50,
         temperature=temperature,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
     if not response.choices:
         raise HTTPException(status_code=502, detail="LLM returned empty response (choices=[])")
-    raw_name = response.choices[0].message.content.strip().strip('"\'')
+    raw_name = (response.choices[0].message.content or "").strip().strip('"\'')
     new_name = AsyncTreeNamer._sanitize_name(raw_name)
     
     # Update database

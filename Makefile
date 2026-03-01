@@ -4,7 +4,8 @@ VENV_DIR := .venv
 ACTIVATE := source $(VENV_DIR)/bin/activate
 
 .PHONY: install install-frontend test run clean docker-build docker-run \
-        singularity-build singularity-run singularity-stop pull-slack \
+        singularity-build singularity-build-backend singularity-build-frontend \
+        singularity-run singularity-stop pull-slack \
         test-db-init test-db-reset \
         validation functional integration
 
@@ -119,6 +120,10 @@ singularity-build:
 singularity-build-backend:
 	@mkdir -p $(CONTAINER_DIR)
 	singularity build --force --fakeroot $(SIF_BACKEND) $(CONTAINER_DIR)/backend.def
+
+singularity-build-frontend:
+	@mkdir -p $(CONTAINER_DIR)
+	singularity build --force --fakeroot $(SIF_FRONTEND) $(CONTAINER_DIR)/frontend.def
 
 singularity-run:
 	./scripts/hpc-services.sh start

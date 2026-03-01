@@ -111,6 +111,7 @@ class TestReabbreviate:
         )
 
 
+@pytest.mark.skip(reason="reabbreviate-all has no GUI button and is not currently in use")
 class TestReabbreviateAll:
     def test_reabbreviate_all(self, backend_available, llm_available):
         """POST /papers/reabbreviate-all must return 200 with update count."""

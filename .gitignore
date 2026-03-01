@@ -12,6 +12,7 @@ __pycache__/
 .eggs/
 dist/
 build/
+doc/
 
 # Testing
 .pytest_cache/
@@ -29,6 +30,9 @@ storage/
 node_modules/
 .next/
 .env*.local
+
+# Claude Code instructions (local only)
+CLAUDE.md
 
 # OS
 .DS_Store

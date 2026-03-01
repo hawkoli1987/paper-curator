@@ -83,6 +83,18 @@ def resolve_model(base_url: str, api_key: str) -> str:
         raise
 
 
+def strip_thinking(content: str) -> str:
+    """Remove <think>...</think> blocks from LLM response content.
+
+    Applied defensively to all LLM responses. When vllm's reasoning parser is
+    active the thinking content should already be in message.reasoning_content,
+    but parser leakage or models that echo the tag can still produce <think>
+    blocks in message.content. This strips them unconditionally.
+    """
+    import re
+    return re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+
+
 def get_llm_config() -> dict[str, str]:
     """Load LLM configuration from config (with DB overrides).
     

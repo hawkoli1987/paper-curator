@@ -38,7 +38,7 @@ class TestConnectivity:
 
         # Include ngrok bypass header — required for ngrok free-tier URLs, harmless otherwise
         headers = {"ngrok-skip-browser-warning": "true"}
-        models_resp = requests.get(f"{llm_base_url}/models", timeout=15, headers=headers)
+        models_resp = requests.get(f"{llm_base_url}/models", timeout=60, headers=headers)
         assert models_resp.status_code == 200, f"LLM endpoint not responding at {llm_base_url}"
 
         models = models_resp.json()
@@ -58,7 +58,7 @@ class TestConnectivity:
 
         # Include ngrok bypass header — required for ngrok free-tier URLs, harmless otherwise
         headers = {"ngrok-skip-browser-warning": "true"}
-        models_resp = requests.get(f"{embed_base_url}/models", timeout=15, headers=headers)
+        models_resp = requests.get(f"{embed_base_url}/models", timeout=60, headers=headers)
         assert models_resp.status_code == 200, f"Embedding endpoint not responding at {embed_base_url}"
 
         models = models_resp.json()

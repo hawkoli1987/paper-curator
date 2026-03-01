@@ -60,9 +60,14 @@ class TestExplainReference:
         if not ref_id:
             pytest.skip("Reference has no usable ID field")
 
-        explain_resp = requests.get(
+        explain_resp = requests.post(
             f"{BACKEND_URL}/references/explain",
-            params={"arxiv_id": arxiv_id, "ref_paper_id": ref_id},
+            json={
+                "reference_id": ref.get("id"),
+                "source_paper_title": existing_paper.get("title", ""),
+                "cited_title": ref.get("cited_title", ""),
+                "citation_context": ref.get("citation_context"),
+            },
             timeout=LLM_TIMEOUT,
         )
         assert explain_resp.status_code == 200, (
@@ -90,17 +95,22 @@ class TestExplainReference:
         if not ref_id:
             pytest.skip("Reference has no usable ID field")
 
-        params = {"arxiv_id": arxiv_id, "ref_paper_id": ref_id}
+        payload = {
+            "reference_id": ref.get("id"),
+            "source_paper_title": existing_paper.get("title", ""),
+            "cited_title": ref.get("cited_title", ""),
+            "citation_context": ref.get("citation_context"),
+        }
         # First call (may or may not be cached)
-        requests.get(
+        requests.post(
             f"{BACKEND_URL}/references/explain",
-            params=params,
+            json=payload,
             timeout=LLM_TIMEOUT,
         )
         # Second call — should be served from cache
-        second_resp = requests.get(
+        second_resp = requests.post(
             f"{BACKEND_URL}/references/explain",
-            params=params,
+            json=payload,
             timeout=MEDIUM_TIMEOUT,
         )
         assert second_resp.status_code == 200

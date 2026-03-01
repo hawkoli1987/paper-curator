@@ -410,5 +410,6 @@ async def _generate_answer(
         messages=[{"role": "user", "content": prompt}],
         max_tokens=max_tokens,
         temperature=0.3,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
-    return response.choices[0].message.content.strip()
+    return (response.choices[0].message.content or "").strip()

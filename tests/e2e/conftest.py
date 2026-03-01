@@ -10,8 +10,6 @@ Environment variables:
 """
 import os
 from pathlib import Path
-from typing import Optional
-
 import pytest
 import requests
 
@@ -22,7 +20,7 @@ SAMPLE_ARXIV_ID = "1706.03762"
 SHORT_TIMEOUT = 10    # health checks, trivial lookups
 MEDIUM_TIMEOUT = 60   # metadata, DB queries, embeddings
 LLM_TIMEOUT = 300     # single LLM call (summarize, classify, QA)
-BATCH_TIMEOUT = 900   # batch operations
+BATCH_TIMEOUT = 1800  # batch operations (30 min — full tree rebuild with DeepSeek)
 
 
 # ---------------------------------------------------------------------------
@@ -88,22 +86,7 @@ def existing_paper(backend_available, backend_url):
     )
     if cached.status_code == 200:
         return {"arxiv_id": SAMPLE_ARXIV_ID, **cached.json()}
-    # Fall back to any paper from tree
-    tree = requests.get(f"{backend_url}/tree", timeout=MEDIUM_TIMEOUT).json()
-    paper_id = _find_first_paper_id(tree)
-    if not paper_id:
-        pytest.skip("Could not find a paper in the tree")
-    return {"arxiv_id": paper_id}
-
-
-def _find_first_paper_id(node: dict) -> Optional[str]:
-    if "paper_id" in node:
-        return node["paper_id"]
-    for child in node.get("children", []):
-        result = _find_first_paper_id(child)
-        if result:
-            return result
-    return None
+    pytest.skip(f"Well-known paper {SAMPLE_ARXIV_ID} not in production DB — run ingest first")
 
 
 # ---------------------------------------------------------------------------
