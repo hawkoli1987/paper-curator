@@ -12,7 +12,8 @@ __pycache__/
 .eggs/
 dist/
 build/
-doc/
+doc/*
+!doc/mechanism/
 
 # Testing
 .pytest_cache/
