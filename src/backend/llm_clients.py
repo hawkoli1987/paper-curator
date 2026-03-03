@@ -12,7 +12,7 @@ def get_openai_client(base_url: str, api_key: str) -> OpenAI:
         import httpx
         http_client = httpx.Client(
             headers={"ngrok-skip-browser-warning": "true"},
-            timeout=30.0,
+            timeout=600.0,
             follow_redirects=True,
         )
         return OpenAI(
@@ -30,7 +30,7 @@ def get_async_openai_client(base_url: str, api_key: str) -> AsyncOpenAI:
         import httpx
         http_client = httpx.AsyncClient(
             headers={"ngrok-skip-browser-warning": "true"},
-            timeout=30.0,
+            timeout=600.0,
             follow_redirects=True,
         )
         return AsyncOpenAI(
