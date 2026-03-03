@@ -6,8 +6,8 @@
 
 As AI researchers and engineers, we face a familiar set of frustrations:
 
-**Sharing is easy. Retaining is not.**
-A colleague drops an arXiv link in Slack. You skim the abstract, think "I'll read this later," and move on. Within a day, it's buried under 200 messages. Within a week, you've forgotten it exists.
+**Phase Lag - Discovery and Digestion**
+We found an interesting paper, skim the abstract, think "I'll read this later," and move on. Within a day, it's buried under 200 messages. Within a week, you've forgotten it exists.
 
 **Manual organization doesn't scale.**
 You start a spreadsheet. Or a Notion page. Or a folder of PDFs. It works for 20 papers. At 50, you stop updating it. At 100+, it's abandoned.

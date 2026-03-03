@@ -7,53 +7,64 @@
 Paper Curator is a full-stack application with three layers, connected to external AI and data services:
 
 ```mermaid
+%%{ init: { "flowchart": { "rankSpacing": 120, "nodeSpacing": 25 } } }%%
 flowchart TB
-    subgraph frontend [Frontend -- Next.js 14]
-        UI["Interactive Tree View<br/>(d3-hierarchy)"]
-        Panels["Feature Panels<br/>(Summarize, Q&A, Topic, References)"]
+    subgraph frontend ["Frontend — Next.js 14"]
+        direction LR
+        UI["Interactive Tree View (d3-hierarchy)"]
+        Panels["Feature Panels (Summarize, Q&A, Topic, References)"]
     end
 
-    subgraph backend [Backend -- FastAPI]
-        API["~60 REST Endpoints"]
-        RAG["RAG Engine"]
+    subgraph backend ["Backend — FastAPI"]
+        direction LR
         Cluster["Clustering Engine"]
+        RAG["RAG Engine"]
         Naming["LLM Naming"]
-    end
-
-    subgraph storage [Storage -- PostgreSQL + pgvector]
-        Papers["papers<br/>(metadata + embeddings)"]
-        Chunks["paper_chunks<br/>(text + embeddings)"]
-        Tree["tree_structure<br/>(JSONB taxonomy)"]
-        Topics["topics<br/>(sessions + queries)"]
-    end
-
-    subgraph ai [AI Endpoints -- OpenAI-compatible]
-        LLM["LLM<br/>(DeepSeek-V3.2)"]
-        SLM["SLM<br/>(Qwen3-4B)"]
-        Embed["Embedding Model<br/>(Qwen3-VL-Embedding-8B)"]
-    end
-
-    subgraph external [External APIs]
-        ArXiv[arXiv]
-        SemanticScholar[Semantic Scholar]
-        GitHub[GitHub + Papers With Code]
-        SlackAPI[Slack]
+        API["REST API (~60 endpoints)"]
     end
 
     UI --> API
     Panels --> API
-    API --> RAG
     API --> Cluster
+    API --> RAG
     API --> Naming
-    RAG --> Papers
-    RAG --> Chunks
+
+    subgraph deps [" "]
+        direction LR
+
+        subgraph storage ["PostgreSQL + pgvector"]
+            direction TB
+            Papers["papers (metadata + embeddings)"]
+            Chunks["paper_chunks (text + embeddings)"]
+            Tree["tree_structure (JSONB taxonomy)"]
+            Topics["topics (sessions + queries)"]
+        end
+
+        subgraph ai ["AI Endpoints — OpenAI-compatible"]
+            direction TB
+            LLM["LLM — DeepSeek-V3.2"]
+            Embed["Embedding — Qwen3-VL-8B"]
+            SLM["SLM — Qwen3-4B"]
+        end
+
+        subgraph external ["External APIs"]
+            direction TB
+            ArXiv["arXiv"]
+            SemanticScholar["Semantic Scholar"]
+            GitHub["GitHub + Papers With Code"]
+            SlackAPI["Slack"]
+        end
+    end
+
     Cluster --> Papers
     Cluster --> Tree
-    Naming --> Tree
+    Cluster --> Embed
+    RAG --> Papers
+    RAG --> Chunks
     RAG --> LLM
     RAG --> Embed
+    Naming --> Tree
     Naming --> SLM
-    Cluster --> Embed
     API --> ArXiv
     API --> SemanticScholar
     API --> GitHub

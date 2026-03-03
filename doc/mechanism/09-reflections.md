@@ -84,9 +84,18 @@ Well-designed agentic workflows **don't do more work than the situation requires
 
 **LLM reliability at scale.** When you make 30+ LLM calls in a classification run, even a 5% failure rate means 1-2 broken category names. Robust error handling and retry logic are essential.
 
-**Chunking is a compromise.** Fixed-size character chunking works, but academic papers have structure (sections, figures, equations) that could inform better chunking. This is an active area for improvement.
+**From conventional RAG to hybrid RAG.** The current pipeline uses pure dense retrieval -- embed the query, find chunks with the highest cosine similarity. This works well for semantic questions ("What problem does this paper solve?") but can miss exact keyword matches. A query like "What learning rate does the LoRA adapter use?" requires matching the terms "LoRA" and "learning rate" precisely, not just finding semantically similar chunks. Dense retrieval might surface a chunk about "parameter-efficient fine-tuning" that never mentions the specific term.
 
-**Evaluation is subjective.** How do you measure whether a classification taxonomy is "good"? Or whether a summary captures the right aspects? We rely on user feedback, which is slow and inconsistent.
+The next step is **hybrid RAG**: combining dense retrieval (vector similarity) with sparse retrieval (BM25 / keyword matching). Sparse retrieval excels at exact term matching -- model names, dataset names, hyperparameters, abbreviations -- while dense retrieval catches semantic paraphrases and conceptual similarity. Merging both ranked lists via Reciprocal Rank Fusion gives more robust retrieval, especially for the keyword-heavy language of academic papers.
+
+**Frontend testing is challenging.** The UI is a single 4000+ line React component with an interactive d3 tree visualization, drag-and-drop, context menus, and multi-panel state. Manual testing is slow, brittle, and doesn't scale with feature velocity. Every backend change can have unexpected UI side effects that only surface through visual interaction.
+
+**Quality of tree and query output is hard to assess.** Classification taxonomy quality, RAG answer accuracy, and summary completeness are all subjective. There is no ground-truth label for "is this tree structure good?" or "did the summary capture the key insight?" We currently rely on manual user feedback, which is slow and inconsistent.
+
+**Mitigation for both:** Two complementary approaches address these challenges:
+
+- **Rubric-based agentic evaluation** -- A VLM-as-judge system scores outputs against predefined rubrics. For classification: "Are sibling categories mutually exclusive? Do category names reflect their contents?" For RAG: "Does the answer cite specific paper sections? Is it factually grounded in the retrieved chunks?" The VLM evaluates screenshots (for frontend correctness) or structured output (for content quality), producing numeric scores and natural-language explanations.
+- **Automated orchestrator-based testing** -- Browser-automation agents (Playwright / browser-use MCP) driven by an orchestrator navigate the UI end-to-end: ingest papers, trigger classification, run queries, and capture the results. These are fed to the VLM judge for evaluation. This closes the loop -- the orchestrator acts, the VLM evaluates, and regressions are caught automatically without manual intervention.
 
 ---
 

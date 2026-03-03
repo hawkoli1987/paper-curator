@@ -1,10 +1,10 @@
-# Classification: "100+ Papers, No Organization"
+# Classification: "2000+ Papers, No Organization"
 
 ---
 
 ## The Need
 
-Once you have 100+ papers in a database, you need structure. But manual categorization has two problems:
+Once you have 2000+ papers in a database, you need structure. But manual categorization has two problems:
 
 1. **It doesn't scale.** Categorizing 100 papers by hand takes hours, and every new batch means re-doing it.
 2. **Categories are subjective.** Two researchers would organize the same papers differently. And as the collection grows, the right categories change.
@@ -46,6 +46,8 @@ flowchart TB
     TreeOut --> D3["Interactive d3 Tree<br/>in Frontend"]
 ```
 
+
+
 ---
 
 ## Deep Dive: Silhouette Scoring
@@ -64,17 +66,31 @@ A high silhouette means clusters are **tight internally and well-separated from 
 
 ### How We Use It
 
-At each node in the tree, we try every possible k from 2 to `branching_factor` (default 5):
+The tree is built top-down by recursively splitting nodes. At each **parent node** being split, we need to decide: how many child clusters should it produce? We try every k from 2 to `branching_factor` (default 5) and let the data decide.
+
+**What "run k-means with k" means:** Take all paper embeddings belonging to this parent node and run the k-means algorithm, which partitions them into k groups by iteratively assigning each paper to its nearest cluster centroid and recomputing centroids until convergence. Since embeddings are L2-normalized, Euclidean distance between them is equivalent to cosine distance -- papers with similar content end up in the same cluster.
+
+**What "compute silhouette score" means:** After k-means assigns every paper to one of k clusters, we evaluate how good that split is. For each paper, we compute two distances:
+
+- **a** = its average distance to the other papers **in the same cluster** (how tight is my group?)
+- **b** = its average distance to papers in the **nearest neighboring cluster** (how far am I from the next-closest group?)
+
+The silhouette for that paper is (b - a) / max(a, b). We then average across all papers at this node to get a single score for this particular k.
+
+**The score evaluates the parent's split, not the children.** It measures the quality of dividing this parent node into k children. A high score means the proposed children are internally cohesive and well-separated from each other. A low score means the split is artificial -- papers in different clusters aren't really that different.
 
 ```
-For k in [2, 3, 4, 5]:
-    Run k-means with k clusters
-    Compute silhouette score across all papers at this node
-    
-Choose the k with the highest silhouette score
+Parent node has 30 papers. Try splitting it:
+
+  k=2: k-means → 2 clusters → silhouette = 0.42
+  k=3: k-means → 3 clusters → silhouette = 0.58  ← best
+  k=4: k-means → 4 clusters → silhouette = 0.51
+  k=5: k-means → 5 clusters → silhouette = 0.39
+
+  → Choose k=3: this parent gets 3 children
 ```
 
-This means different parts of the tree can have different branching factors. A node with 3 tightly-separated groups gets k=3. A node where everything is similar stays at k=2. **No manual tuning required.**
+Each of those 3 children then becomes a parent in the next level of recursion, where the same process repeats with its own subset of papers. This means different parts of the tree can have different branching factors -- a node with 3 tightly-separated groups gets k=3, a node where everything is similar stays at k=2. **No manual tuning required.**
 
 ### Fallback: BisectingKMeans
 
@@ -105,6 +121,8 @@ flowchart LR
     context --> LLM["LLM generates name<br/>that CONTRASTS with siblings"]
     LLM --> Result["Result: 'Single-Agent<br/>Policy Optimization'"]
 ```
+
+
 
 The prompt explicitly instructs:
 

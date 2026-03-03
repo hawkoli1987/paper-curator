@@ -82,10 +82,18 @@ The system supports both modes, triggered by different actions:
 
 | Mode | Trigger | Use Case |
 |------|---------|----------|
-| **Full rebuild** | User clicks "Re-categorize" | After a major batch ingest, or when the taxonomy feels wrong |
+| **Full rebuild** | User clicks "Re-categorize" | Periodically, to reset path-dependency drift; or after a major batch ingest |
 | **Incremental placement** | Automatic after each paper ingest | Daily additions from Slack, individual paper saves |
 
 The `rebuild_on_ingest` config option (default: `false`) controls whether ingestion triggers a full rebuild or incremental placement. In practice, incremental placement handles daily additions well, and full rebuilds are reserved for periodic reorganization.
+
+### Why Full Rebuilds Are Still Needed: Path Dependency
+
+Incremental placement is **path-dependent** -- the resulting tree depends on the *order* papers were ingested, not just the set. When paper A arrives first, it shifts the centroid of the cluster it joins. When paper B arrives later, it sees a different centroid landscape than if it had arrived first. Over time, the tree drifts: the same collection of papers, ingested in a different order, would produce a different taxonomy.
+
+Full rebuild is **order-independent**. Given the same set of papers, k-means with `random_state=42` + silhouette scoring always produces the same tree. It "resets" the accumulated path-dependency artifacts and finds the globally optimal clustering for the current collection.
+
+This is the primary reason to periodically run a full rebuild -- not because the incremental tree is wrong, but because it may have drifted from the structure that best represents the collection as a whole.
 
 ---
 

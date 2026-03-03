@@ -16,34 +16,51 @@ Point the system at a Slack channel. It fetches all messages, extracts arXiv IDs
 
 ```mermaid
 flowchart TB
-    Slack["Slack Channel"] --> Fetch["Fetch Messages<br/>& Extract arXiv IDs"]
-    Fetch --> Sem["Semaphore<br/>(max 10 concurrent)"]
+    Slack["Slack Channel"] --> Fetch["Fetch Messages & Extract arXiv IDs"]
+    Fetch --> Sem["Semaphore (max 10 concurrent)"]
 
     Sem --> P1["Paper 1"]
     Sem --> P2["Paper 2"]
     Sem --> Pn["Paper N"]
 
+    P1 --> Meta
+    P2 --> Meta
+    Pn --> Meta
+
     subgraph pipeline ["Per-Paper Pipeline (autonomous)"]
         direction TB
-        Meta["1. Fetch arXiv Metadata<br/>(title, authors, abstract)"] --> DL["2. Download PDF"]
-        DL --> Extract["3. Extract Full Text<br/>(pymupdf)"]
-        Extract --> EmbedAbbrev["4. Generate Embedding<br/>+ LLM Abbreviation"]
-        EmbedAbbrev --> Summarize["5. RAG Summarization<br/>(chunk, embed, retrieve, generate)"]
-        Summarize --> Store["6. Store in DB<br/>(metadata + embedding + chunks)"]
+        Meta["1. Fetch arXiv Metadata"] --> DL["2. Download PDF"]
+        DL --> Extract["3. Extract Full Text (pymupdf)"]
+        Extract --> EmbedAbbrev["4. Generate Embedding + LLM Abbreviation"]
+        EmbedAbbrev --> Summarize["5. RAG Summarization"]
+        Summarize --> Store["6. Store in DB"]
     end
 
-    P1 --> pipeline
-    P2 --> pipeline
-    Pn --> pipeline
-
-    Store --> Place["Optional: Place in<br/>Existing Taxonomy"]
+    Store --> Place["Optional: Place in Existing Taxonomy"]
 ```
 
 ---
 
-## What Makes This Agentic
+## Setting Up Slack Ingestion
 
-This isn't a single API call -- it's an **orchestrated pipeline** where each step depends on the previous one, and different AI capabilities are invoked at different stages:
+To ingest papers from a Slack channel, you need a Slack Bot with read access. Here are the steps:
+
+| Step | What to Do |
+|------|-----------|
+| **1. Create a Slack App** | Go to [api.slack.com/apps](https://api.slack.com/apps), click "Create New App", choose "From scratch", pick your workspace |
+| **2. Add Bot Scopes** | Under OAuth & Permissions, add these Bot Token Scopes: `channels:history`, `channels:read`, `groups:history`, `groups:read` |
+| **3. Install to Workspace** | Click "Install to Workspace" and authorize. Copy the **Bot User OAuth Token** (starts with `xoxb-`) |
+| **4. Invite Bot to Channel** | In Slack, go to the target channel, type `/invite @YourBotName` |
+| **5. Configure Paper Curator** | Store the token at `~/.ssh/.slack` (chmod 600). The system reads it automatically on startup |
+| **6. Trigger Ingestion** | In the Paper Curator UI, enter the Slack channel name and click "Ingest". The pipeline fetches all messages containing arXiv links |
+
+Once configured, ingestion from any channel the bot has access to is a single click.
+
+---
+
+## Why Heterogenous Model Backend
+
+We need more than a single API call -- it should be an **orchestrated pipeline** where each step depends on the previous one, and different AI capabilities are invoked at different stages:
 
 | Step | Capability Used | What Happens |
 |------|----------------|--------------|
