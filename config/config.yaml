@@ -38,9 +38,9 @@ slack:
 # NOTE: You can use localhost URLs - they auto-convert to host.docker.internal in Docker
 # =============================================================================
 endpoints:
-  llm_base_url: "https://transmissively-conidial-fredrick.ngrok-free.dev/deepseek/v1"  # LLM: DeepSeek-V3.2 via ngrok
-  slm_base_url: "https://transmissively-conidial-fredrick.ngrok-free.dev/teacher/v1"  # SLM: Qwen3-4B via ngrok (default for naming; fallback for other LLM steps)
-  embedding_base_url: "https://transmissively-conidial-fredrick.ngrok-free.dev/embed/v1"  # Qwen3-VL-Embedding-8B via ngrok
+  llm_base_url: "http://localhost:8000/deepseek/v1"  # LLM: DeepSeek-V3.2 via ngrok
+  slm_base_url: "http://localhost:8000/teacher/v1"  # SLM: Qwen3-4B via ngrok (default for naming; fallback for other LLM steps)
+  embedding_base_url: "http://localhost:8000/embed/v1"  # Qwen3-VL-Embedding-8B via ngrok
   api_key: "local-key"  # Shared key for the endpoints above
 
 # =============================================================================

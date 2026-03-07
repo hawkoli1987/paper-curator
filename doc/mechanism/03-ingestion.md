@@ -102,4 +102,18 @@ The per-paper pipeline is the same regardless of source -- only the "discover pa
 
 ---
 
+## API limits
+| API | Where Used | API Key | Unauthenticated Rate Limit | Authenticated Rate Limit | Free Key? |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Semantic Scholar** | References, Similar papers, Metadata fetch | Optional (`semantic_scholar_api_key`) | ~100 req / 5 min | ~100 req / second | Yes — [semanticscholar.org](https://semanticscholar.org/product/api) |
+| **arXiv** | Paper resolve, PDF download, Batch ingest | None (public) | ~1 request every 3s (recommended) | N/A | N/A |
+| **GitHub** | Repo search | Optional (`github_token`) | 10 req/min (search); 60 req/hr (general) | 30 req/min (search); 5,000 req/hr (general) | Yes — [Personal Access Token](https://github.com/settings/tokens) |
+| **Papers With Code** | Repo search | None (public) | Undocumented (generous) | N/A | N/A |
+| **Slack** | Paper ingestion from channels | Required (OAuth/Bot token) | N/A | Tier-based (~50+ req/min) | Yes — [api.slack.com](https://api.slack.com) |
+
+Recommendations
+Semantic Scholar: The 1000x rate improvement (100/5min -> 100/sec) makes the free API key very worthwhile. This is the direct cause of your "No references found" issue.
+GitHub: The free token takes search limits from 10/min to 30/min and general limits from 60/hr to 5,000/hr. Worth adding if you do frequent repo lookups.
+arXiv and Papers With Code: No API keys available; current usage with retries/backoff is appropriate.
+
 **Takeaway:** An agentic ingestion pipeline turns a passive communication channel (Slack) into an active knowledge pipeline. The fan-out pattern with controlled concurrency makes it practical at scale.
